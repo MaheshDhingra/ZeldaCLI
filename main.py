@@ -22,7 +22,15 @@ def get_news():
     # Placeholder: Replace with real API call if desired
     return "News: Zelda TUI OS launched! (Demo)"
 
+from textual.reactive import var
+from textual.binding import Binding
+
 class MainMenu(Static):
+    BINDINGS = [
+        Binding("enter", "press_focused_button", "Select"),
+        Binding("space", "press_focused_button", "Select"),
+    ]
+
     time_display = var(get_live_clock())
 
     def watch_time_display(self, time_display: str) -> None:
@@ -49,6 +57,11 @@ class MainMenu(Static):
         yield Button("Pomodoro Timer", id="pomodoro_timer")
         yield Button("Backgrounds", id="backgrounds")
         yield Button("Exit", id="exit")
+
+    def action_press_focused_button(self) -> None:
+        focused_widget = self.app.focused
+        if isinstance(focused_widget, Button):
+            focused_widget.press()
 
 class ZeldaTUIOS(App):
     CSS_PATH = "zelda.css"
