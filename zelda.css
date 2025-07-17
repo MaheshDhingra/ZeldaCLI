@@ -1,0 +1,26 @@
+#dashboard {
+    height: 3;
+    background: #1e293b;
+    color: #fbbf24;
+    border: tall #6366f1;
+}
+
+#clock {
+    color: #38bdf8;
+}
+
+#weather {
+    color: #fbbf24;
+}
+
+#news {
+    color: #a3e635;
+}
+
+#mainmenu Button {
+    background: #6366f1;
+    color: #fbbf24;
+    border: round #fbbf24;
+    margin: 1 0;
+}
+
