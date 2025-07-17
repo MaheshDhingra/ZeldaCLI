@@ -24,3 +24,10 @@
     margin: 1 0;
 }
 
+
+
+#mainmenu Button:focus {
+    background: #fbbf24;
+    color: #6366f1;
+    border: round #6366f1;
+}
