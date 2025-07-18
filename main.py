@@ -32,13 +32,15 @@ class MainMenu(Static):
     ]
 
     time_display = var(get_live_clock())
+    _live_clock_widget = None
 
     def watch_time_display(self, time_display: str) -> None:
-        # Only update if the widget has been composed
-        if self.query_one("#live_clock", Static, strict=False):
-            self.query_one("#live_clock", Static).update(time_display)
+        # Only update if the widget has been composed and assigned
+        if self._live_clock_widget:
+            self._live_clock_widget.update(time_display)
 
     def on_mount(self) -> None:
+        self._live_clock_widget = self.query_one("#live_clock", Static)
         self.set_interval(1, self.update_time)
 
     def update_time(self) -> None:
@@ -48,15 +50,18 @@ class MainMenu(Static):
         yield Static(self.time_display, id="live_clock")
         yield Static(get_weather())
         yield Static(get_news())
-        yield Button("File Browser", id="file_browser")
-        yield Button("Calculator", id="calculator")
-        yield Button("System Info", id="system_info")
-        yield Button("Maze Game", id="maze_game")
-        yield Button("Nano Editor", id="nano_editor")
-        yield Button("Web Browser", id="web_browser")
-        yield Button("Pomodoro Timer", id="pomodoro_timer")
-        yield Button("Backgrounds", id="backgrounds")
-        yield Button("Exit", id="exit")
+        yield Horizontal(
+            Button("File Browser", id="file_browser"),
+            Button("Calculator", id="calculator"),
+            Button("System Info", id="system_info"),
+            Button("Maze Game", id="maze_game"),
+            Button("Nano Editor", id="nano_editor"),
+            Button("Web Browser", id="web_browser"),
+            Button("Pomodoro Timer", id="pomodoro_timer"),
+            Button("Backgrounds", id="backgrounds"),
+            Button("Exit", id="exit"),
+            id="main_menu_buttons"
+        )
 
     def action_press_focused_button(self) -> None:
         focused_widget = self.app.focused
@@ -76,7 +81,7 @@ class ZeldaTUIOS(App):
             Static(get_news(), id="news"),
             id="dashboard"
         )
-        yield Vertical(MainMenu(), id="mainmenu")
+        yield Horizontal(MainMenu(), id="mainmenu")
         yield Footer()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -236,14 +241,16 @@ class WebBrowserScreen(Screen):
         elif event.button.id == "go_button":
             self.url = self.query_one("#url_input", Input).value
             if self.url:
-                self.query_one("#browser_content", Static).update(f"Attempting to fetch: {self.url}\n\nNote: A full TUI web browser is a complex feature requiring a dedicated rendering engine. This is a placeholder.")
-                # In a real scenario, you'd use requests or a similar library to fetch content
-                # For now, we'll just simulate it.
-                # try:
-                #     response = requests.get(self.url)
-                #     self.query_one("#browser_content", Static).update(response.text)
-                # except Exception as e:
-                #     self.query_one("#browser_content", Static).update(f"Error fetching URL: {e}")
+                display_url = self.url
+                if not display_url.startswith("http://") and not display_url.startswith("https://"):
+                    display_url = "http://" + display_url
+                try:
+                    response = requests.get(display_url)
+                    self.query_one("#browser_content", Static).update(response.text)
+                except requests.exceptions.RequestException as e:
+                    self.query_one("#browser_content", Static).update(f"Error fetching URL: {e}\n\nNote: A full TUI web browser is a complex feature requiring a dedicated rendering engine. This is a placeholder.")
+                except Exception as e:
+                    self.query_one("#browser_content", Static).update(f"An unexpected error occurred: {e}\n\nNote: A full TUI web browser is a complex feature requiring a dedicated rendering engine. This is a placeholder.")
             else:
                 self.query_one("#browser_content", Static).update("Please enter a URL.")
 
@@ -399,16 +406,16 @@ class CalculatorScreen(Screen):
         yield Input(placeholder="Enter expression...", id="expression")
         yield Static("", id="result")
         yield Horizontal(
-            Button("7", id="7"), Button("8", id="8"), Button("9", id="9"), Button("/", id="/"),
+            Button("7", id="btn_7"), Button("8", id="btn_8"), Button("9", id="btn_9"), Button("/", id="btn_divide"),
         )
         yield Horizontal(
-            Button("4", id="4"), Button("5", id="5"), Button("6", id="6"), Button("*", id="*"),
+            Button("4", id="btn_4"), Button("5", id="btn_5"), Button("6", id="btn_6"), Button("*", id="btn_multiply"),
         )
         yield Horizontal(
-            Button("1", id="1"), Button("2", id="2"), Button("3", id="3"), Button("-", id="-"),
+            Button("1", id="btn_1"), Button("2", id="btn_2"), Button("3", id="btn_3"), Button("-", id="btn_subtract"),
         )
         yield Horizontal(
-            Button("0", id="0"), Button(".", id="."), Button("C", id="clear"), Button("+", id="+"),
+            Button("0", id="btn_0"), Button(".", id="btn_dot"), Button("C", id="btn_clear"), Button("+", id="btn_add"),
         )
         yield Button("=", id="equals")
         yield Button("Back", id="back")
@@ -417,7 +424,7 @@ class CalculatorScreen(Screen):
         button_id = event.button.id
         if button_id == "back":
             self.app.pop_screen()
-        elif button_id == "clear":
+        elif button_id == "btn_clear":
             self.expression = ""
             self.query_one("#expression", Input).value = ""
             self.query_one("#result", Static).update("")
@@ -429,7 +436,19 @@ class CalculatorScreen(Screen):
                 self.query_one("#result", Static).update("Error")
             self.expression = ""
         else:
-            self.expression += button_id
+            # Extract the numeric or operator part from the button_id
+            if button_id.startswith("btn_"):
+                self.expression += button_id[4:]
+            elif button_id.startswith("btn_divide"):
+                self.expression += "/"
+            elif button_id.startswith("btn_multiply"):
+                self.expression += "*"
+            elif button_id.startswith("btn_subtract"):
+                self.expression += "-"
+            elif button_id.startswith("btn_add"):
+                self.expression += "+"
+            elif button_id.startswith("btn_dot"):
+                self.expression += "."
             self.query_one("#expression", Input).value = self.expression
 
 if __name__ == "__main__":
