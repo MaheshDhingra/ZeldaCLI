@@ -1,6 +1,6 @@
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Button, Static, Input
-from textual.containers import Vertical, Horizontal
+from textual.containers import Vertical, Horizontal, Scrollable
 
 import os
 import platform
@@ -8,80 +8,89 @@ import time
 import threading
 import requests
 from textual.screen import Screen
+import asyncio
+import httpx
+import json
+from dotenv import load_dotenv # Import load_dotenv
+from .chess_game import ChessBoard # Import the ChessBoard class
+import random # Add this import
+from .mazes import MAZES # Add this import
+from .mail_service import MailService # Add this import
+from .widgets import ClockWidget, WeatherWidget, NewsWidget, CalculatorWidget, MazeWidget # Add this import
 
-from textual.reactive import var
+# Load environment variables from .env file
+load_dotenv()
 
 def get_live_clock():
     return time.strftime("%H:%M:%S %A %d %b %Y")
 
-def get_weather():
-    # Placeholder: Replace with real API call if desired
-    return "Weather: 25°C, Clear (Demo)"
+async def get_weather():
+    api_key = os.getenv("OPENWEATHERMAP_API_KEY")
+    city = "London" # Replace with your desired city
+    if not api_key or api_key == "YOUR_OPENWEATHERMAP_API_KEY":
+        return "Weather Error: OpenWeatherMap API key not configured in .env"
+    url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric"
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            weather_desc = data["weather"][0]["description"].capitalize()
+            temp = data["main"]["temp"]
+            return f"Weather: {temp}°C, {weather_desc} ({city})"
+    except httpx.RequestError as e:
+        return f"Weather Error: {e} (Check API key and 'httpx' installation)"
+    except json.JSONDecodeError:
+        return "Weather Error: Invalid API response (Check API key)"
+    except Exception as e:
+        return f"Weather Error: {e}"
 
-def get_news():
-    # Placeholder: Replace with real API call if desired
-    return "News: Zelda TUI OS launched! (Demo)"
+async def get_news():
+    api_key = os.getenv("NEWSAPI_API_KEY")
+    if not api_key or api_key == "YOUR_NEWSAPI_API_KEY":
+        return "News Error: NewsAPI API key not configured in .env"
+    url = f"https://newsapi.org/v2/top-headlines?country=us&apiKey={api_key}"
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            if data["articles"]:
+                first_article = data["articles"][0]
+                return f"News: {first_article['title']} (Source: {first_article['source']['name']})"
+            else:
+                return "News: No top headlines found."
+    except httpx.RequestError as e:
+        return f"News Error: {e} (Check API key and 'httpx' installation)"
+    except json.JSONDecodeError:
+        return "News Error: Invalid API response (Check API key)"
+    except Exception as e:
+        return f"News Error: {e}"
 
 from textual.reactive import var
 from textual.binding import Binding
-
-class MainMenu(Static):
-    BINDINGS = [
-        Binding("enter", "press_focused_button", "Select"),
-        Binding("space", "press_focused_button", "Select"),
-    ]
-
-    time_display = var(get_live_clock())
-    _live_clock_widget = None
-
-    def watch_time_display(self, time_display: str) -> None:
-        # Only update if the widget has been composed and assigned
-        if self._live_clock_widget:
-            self._live_clock_widget.update(time_display)
-
-    def on_mount(self) -> None:
-        self._live_clock_widget = self.query_one("#live_clock", Static)
-        self.set_interval(1, self.update_time)
-
-    def update_time(self) -> None:
-        self.time_display = get_live_clock()
-
-    def compose(self) -> ComposeResult:
-        yield Static(self.time_display, id="live_clock")
-        yield Static(get_weather())
-        yield Static(get_news())
-        yield Horizontal(
-            Button("File Browser", id="file_browser"),
-            Button("Calculator", id="calculator"),
-            Button("System Info", id="system_info"),
-            Button("Maze Game", id="maze_game"),
-            Button("Nano Editor", id="nano_editor"),
-            Button("Web Browser", id="web_browser"),
-            Button("Pomodoro Timer", id="pomodoro_timer"),
-            Button("Backgrounds", id="backgrounds"),
-            Button("Exit", id="exit"),
-            id="main_menu_buttons"
-        )
-
-    def action_press_focused_button(self) -> None:
-        focused_widget = self.app.focused
-        if isinstance(focused_widget, Button):
-            focused_widget.press()
 
 class ZeldaTUIOS(App):
     CSS_PATH = "zelda.css"
     TITLE = "Zelda TUI OS"
     SUB_TITLE = "A Textual-based OS in your terminal"
 
+    # Global state for widgets
+    enabled_widgets = {
+        "clock": True,
+        "weather": True,
+        "news": True,
+        "calculator": False,
+        "maze": False,
+    }
+
+    def __init__(self, mail_service: MailService = None):
+        super().__init__()
+        self.mail_service = mail_service
+
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Horizontal(
-            Static(get_live_clock(), id="clock"), # This will still be static, but the MainMenu's clock will be live
-            Static(get_weather(), id="weather"),
-            Static(get_news(), id="news"),
-            id="dashboard"
-        )
-        yield Horizontal(MainMenu(), id="mainmenu")
+        yield Horizontal(DashboardScreen(), id="dashboard_container")
         yield Footer()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -103,24 +112,142 @@ class ZeldaTUIOS(App):
             self.push_screen(PomodoroTimerScreen())
         elif button_id == "backgrounds":
             self.push_screen(BackgroundSelectorScreen())
+        elif button_id == "chess_game":
+            self.push_screen(ChessScreen())
+        elif button_id == "mail_service":
+            self.push_screen(MailScreen())
+        elif button_id == "music_player_app":
+            self.push_screen(MusicPlayerScreen())
+        elif button_id == "clock_app":
+            self.push_screen(ClockAppScreen())
+        elif button_id == "settings_app":
+            self.push_screen(SettingsScreen())
         elif button_id == "exit":
             self.exit()
-class MazeGameScreen(Screen):
+
+# Rename MainMenu to DashboardScreen
+class DashboardScreen(Static): # Renamed from MainMenu
+    BINDINGS = [
+        Binding("enter", "press_focused_button", "Select"),
+        Binding("space", "press_focused_button", "Select"),
+    ]
+
+    async def on_mount(self) -> None:
+        pass # No specific mount logic for dashboard itself, widgets handle their own updates
+
+    def compose(self) -> ComposeResult:
+        # Conditionally yield widgets
+        if self.app.enabled_widgets["clock"]:
+            yield ClockWidget(id="dashboard_clock_widget")
+        if self.app.enabled_widgets["weather"]:
+            yield WeatherWidget(id="dashboard_weather_widget")
+        if self.app.enabled_widgets["news"]:
+            yield NewsWidget(id="dashboard_news_widget")
+        if self.app.enabled_widgets["calculator"]:
+            yield CalculatorWidget(id="dashboard_calculator_widget")
+        if self.app.enabled_widgets["maze"]:
+            yield MazeWidget(id="dashboard_maze_widget")
+
+        yield Horizontal(
+            Button("File Browser", id="file_browser"),
+            Button("Calculator", id="calculator"),
+            Button("System Info", id="system_info"),
+            Button("Maze Game", id="maze_game"),
+            Button("Nano Editor", id="nano_editor"),
+            Button("Web Browser", id="web_browser"),
+            Button("Pomodoro Timer", id="pomodoro_timer"),
+            Button("Backgrounds", id="backgrounds"),
+            Button("Chess Game", id="chess_game"),
+            Button("Mail Service", id="mail_service"),
+            Button("Music Player", id="music_player_app"),
+            Button("Clock App", id="clock_app"),
+            Button("Settings", id="settings_app"),
+            Button("Exit", id="exit"),
+            id="main_menu_buttons"
+        )
+
+    def action_press_focused_button(self) -> None:
+        focused_widget = self.app.focused
+        if isinstance(focused_widget, Button):
+            focused_widget.press()
+
+class SettingsScreen(Screen):
+    BINDINGS = [
+        Binding("escape", "pop_screen", "Back"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Static("Settings", id="settings_title")
+        yield Static("Toggle Widgets:")
+        for widget_name, is_enabled in self.app.enabled_widgets.items():
+            yield Button(f"{widget_name.capitalize()} {'(ON)' if is_enabled else '(OFF)'}", id=f"toggle_widget_{widget_name}")
+        yield Button("Back", id="back_settings")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "back_settings":
+            self.app.pop_screen()
+        elif event.button.id.startswith("toggle_widget_"):
+            widget_name = event.button.id[len("toggle_widget_"):]
+            self.app.enabled_widgets[widget_name] = not self.app.enabled_widgets[widget_name]
+            self.refresh_compose()
+            # Find the DashboardScreen and refresh it
+            dashboard = self.app.query_one("#dashboard_container", DashboardScreen)
+            dashboard.clear_screen()
+            dashboard.compose()
+
+    def refresh_compose(self):
+        # Clear existing content and recompose
+        for widget in self.query("Button, Static"): # Clear all buttons and statics
+            widget.remove()
+        self.compose() # Re-run compose to update content based on current_view
+
+class ChessScreen(Screen):
+    BINDINGS = [
+        Binding("escape", "pop_screen", "Back"),
+    ]
+
     def __init__(self):
         super().__init__()
-        self.maze = [
-            "#########",
-            "#S      #",
-            "# # ### #",
-            "# #   # #",
-            "# ### # #",
-            "#   # # #",
-            "### # # #",
-            "#     E #",
-            "#########",
-        ]
+        self.chess_board = ChessBoard()
+        self.move_input = ""
+
+    def compose(self) -> ComposeResult:
+        yield Static("Chess Game", id="chess_title")
+        yield Static(self.chess_board.display(), id="chess_board_display")
+        yield Static(self.chess_board.get_status(), id="chess_status")
+        yield Input(placeholder="Enter move (e.g., e2e4)", id="move_input")
+        yield Horizontal(
+            Button("Make Move", id="make_move"),
+            Button("Back", id="back")
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "back":
+            self.app.pop_screen()
+        elif event.button.id == "make_move":
+            self.move_input = self.query_one("#move_input", Input).value
+            if self.move_input:
+                result_message = self.chess_board.make_move(self.move_input)
+                self.chess_board.switch_player() # For simple turn-taking
+                self.query_one("#chess_board_display", Static).update(self.chess_board.display())
+                self.query_one("#chess_status", Static).update(f"{self.chess_board.get_status()} {result_message}")
+                self.query_one("#move_input", Input).value = "" # Clear input
+            else:
+                self.query_one("#chess_status", Static).update("Please enter a move.")
+
+class MazeGameScreen(Screen):
+    BINDINGS = [
+        Binding("escape", "pop_screen", "Back"),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.maze = self.load_random_maze()
         self.player_pos = self.find_start()
         self.message = "Find the 'E' to exit!"
+
+    def load_random_maze(self):
+        return random.choice(MAZES)
 
     def find_start(self):
         for r, row in enumerate(self.maze):
@@ -145,11 +272,17 @@ class MazeGameScreen(Screen):
             Button("Left", id="move_left"),
             Button("Right", id="move_right"),
         )
+        yield Button("New Maze", id="new_maze")
         yield Button("Back", id="back")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back":
             self.app.pop_screen()
+        elif event.button.id == "new_maze":
+            self.maze = self.load_random_maze()
+            self.player_pos = self.find_start()
+            self.message = "Find the 'E' to exit!"
+            self.update_maze_display()
         else:
             self.move_player(event.button.id)
             self.update_maze_display()
@@ -190,7 +323,92 @@ class MazeGameScreen(Screen):
         self.query_one("#maze_display", Static).update(maze_display)
         self.query_one("#maze_message", Static).update(self.message)
 
+class MailScreen(Screen):
+    BINDINGS = [
+        Binding("escape", "pop_screen", "Back"),
+    ]
+
+class MusicPlayerScreen(Screen):
+    BINDINGS = [
+        Binding("escape", "pop_screen", "Back"),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.is_playing = False
+        self.current_song = "No song loaded"
+        self.playlist = ["Song A - Artist 1", "Song B - Artist 2", "Song C - Artist 3"]
+        self.current_song_index = 0
+
+    def compose(self) -> ComposeResult:
+        yield Static("Music Player (Simulated)", id="music_title")
+        yield Static(f"Now Playing: {self.current_song}", id="current_song_display")
+        yield Horizontal(
+            Button("Play", id="play_music"),
+            Button("Pause", id="pause_music"),
+            Button("Stop", id="stop_music"),
+            Button("Next", id="next_song"),
+            Button("Previous", id="prev_song"),
+        )
+        yield Static("Playlist:", id="playlist_header")
+        yield Scrollable(Static("\n".join(self.playlist), id="playlist_display"))
+        yield Button("Back", id="back_music")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "back_music":
+            self.app.pop_screen()
+        elif event.button.id == "play_music":
+            if not self.is_playing:
+                self.is_playing = True
+                self.current_song = self.playlist[self.current_song_index]
+                self.query_one("#current_song_display", Static).update(f"Now Playing: {self.current_song} (Playing)")
+        elif event.button.id == "pause_music":
+            if self.is_playing:
+                self.is_playing = False
+                self.query_one("#current_song_display", Static).update(f"Now Playing: {self.current_song} (Paused)")
+        elif event.button.id == "stop_music":
+            self.is_playing = False
+            self.current_song = "No song loaded"
+            self.query_one("#current_song_display", Static).update(f"Now Playing: {self.current_song}")
+        elif event.button.id == "next_song":
+            self.current_song_index = (self.current_song_index + 1) % len(self.playlist)
+            self.current_song = self.playlist[self.current_song_index]
+            self.query_one("#current_song_display", Static).update(f"Now Playing: {self.current_song} {'(Playing)' if self.is_playing else ''}")
+        elif event.button.id == "prev_song":
+            self.current_song_index = (self.current_song_index - 1 + len(self.playlist)) % len(self.playlist)
+            self.current_song = self.playlist[self.current_song_index]
+            self.query_one("#current_song_display", Static).update(f"Now Playing: {self.current_song} {'(Playing)' if self.is_playing else ''}")
+
+class ClockAppScreen(Screen): # Renamed from ClockScreen to avoid confusion with ClockWidget
+    BINDINGS = [
+        Binding("escape", "pop_screen", "Back"),
+    ]
+
+    live_time = var(time.strftime("%H:%M:%S %A %d %b %Y"))
+
+    def on_mount(self) -> None:
+        self.set_interval(1, self.update_live_time)
+
+    def update_live_time(self) -> None:
+        self.live_time = time.strftime("%H:%M:%S %A %d %b %Y")
+
+    def watch_live_time(self, live_time: str) -> None:
+        self.query_one("#full_clock_display", Static).update(live_time)
+
+    def compose(self) -> ComposeResult:
+        yield Static("Clock App", id="clock_app_title")
+        yield Static(self.live_time, id="full_clock_display")
+        yield Button("Back", id="back_clock_app")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "back_clock_app":
+            self.app.pop_screen()
+
 class NanoEditorScreen(Screen):
+    BINDINGS = [
+        Binding("escape", "pop_screen", "Back"),
+    ]
+
     def __init__(self, path=None):
         super().__init__()
         self.path = path
@@ -200,8 +418,10 @@ class NanoEditorScreen(Screen):
                 self.content = f.read()
 
     def compose(self) -> ComposeResult:
-        yield Static(f"Editing: {self.path or 'New File'}")
+        yield Static(f"Editing: {self.path or 'New File'}", id="editor_status")
         yield Input(value=self.content, placeholder="Start typing...", id="editor_input", classes="editor")
+        if not self.path:
+            yield Input(placeholder="Enter file path to save as...", id="save_path_input")
         yield Horizontal(
             Button("Save", id="save_file"),
             Button("Back", id="back")
@@ -212,27 +432,37 @@ class NanoEditorScreen(Screen):
             self.app.pop_screen()
         elif event.button.id == "save_file":
             new_content = self.query_one("#editor_input", Input).value
-            if self.path:
+            save_path = self.path
+            if not save_path:
+                save_path = self.query_one("#save_path_input", Input).value
+
+            if save_path:
                 try:
-                    with open(self.path, "w") as f:
+                    # Ensure directory exists
+                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                    with open(save_path, "w") as f:
                         f.write(new_content)
-                    self.query_one(Static).update(f"Saved: {self.path}")
+                    self.query_one("#editor_status", Static).update(f"Saved: {save_path}")
+                    self.path = save_path # Update path if it was a new file
                 except Exception as e:
-                    self.query_one(Static).update(f"Error saving file: {e}")
+                    self.query_one("#editor_status", Static).update(f"Error saving file: {e}")
             else:
-                # For new files, prompt for a path or save to a default location
-                self.query_one(Static).update("Please specify a file path to save.")
+                self.query_one("#editor_status", Static).update("Please specify a file path to save.")
 
 class WebBrowserScreen(Screen):
+    BINDINGS = [
+        Binding("escape", "pop_screen", "Back"),
+    ]
+
     def __init__(self):
         super().__init__()
         self.url = ""
 
     def compose(self) -> ComposeResult:
-        yield Static("TUI Web Browser (Limited Functionality)")
+        yield Static("TUI Web Browser (Limited Functionality)", id="browser_status")
         yield Input(placeholder="Enter URL (e.g., example.com)", id="url_input")
         yield Button("Go", id="go_button")
-        yield Static("", id="browser_content")
+        yield Scrollable(Static("", id="browser_content"))
         yield Button("Back", id="back")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -245,16 +475,25 @@ class WebBrowserScreen(Screen):
                 if not display_url.startswith("http://") and not display_url.startswith("https://"):
                     display_url = "http://" + display_url
                 try:
-                    response = requests.get(display_url)
+                    self.query_one("#browser_status", Static).update(f"Fetching: {display_url}")
+                    response = requests.get(display_url, timeout=5) # Add a timeout
                     self.query_one("#browser_content", Static).update(response.text)
+                    self.query_one("#browser_status", Static).update(f"Displaying: {display_url}")
                 except requests.exceptions.RequestException as e:
                     self.query_one("#browser_content", Static).update(f"Error fetching URL: {e}\n\nNote: A full TUI web browser is a complex feature requiring a dedicated rendering engine. This is a placeholder.")
+                    self.query_one("#browser_status", Static).update("Error fetching URL.")
                 except Exception as e:
                     self.query_one("#browser_content", Static).update(f"An unexpected error occurred: {e}\n\nNote: A full TUI web browser is a complex feature requiring a dedicated rendering engine. This is a placeholder.")
+                    self.query_one("#browser_status", Static).update("An unexpected error occurred.")
             else:
                 self.query_one("#browser_content", Static).update("Please enter a URL.")
+                self.query_one("#browser_status", Static).update("TUI Web Browser (Limited Functionality)")
 
 class PomodoroTimerScreen(Screen):
+    BINDINGS = [
+        Binding("escape", "pop_screen", "Back"),
+    ]
+
     def __init__(self):
         super().__init__()
         self.timer_running = False
@@ -263,7 +502,7 @@ class PomodoroTimerScreen(Screen):
 
     def compose(self) -> ComposeResult:
         mins, secs = divmod(self.time_left, 60)
-        yield Static(f"Pomodoro Timer: {mins:02d}:{secs:02d}")
+        yield Static(f"Pomodoro Timer: {mins:02d}:{secs:02d}", id="timer_display")
         yield Button("Start", id="start")
         yield Button("Stop", id="stop")
         yield Button("Reset", id="reset")
@@ -275,13 +514,12 @@ class PomodoroTimerScreen(Screen):
                 self.timer_running = True
                 self.timer_thread = threading.Thread(target=self.run_timer, daemon=True)
                 self.timer_thread.start()
-                self.refresh()
         elif event.button.id == "stop":
             self.timer_running = False
         elif event.button.id == "reset":
             self.timer_running = False
             self.time_left = 25 * 60
-            self.refresh()
+            self.update_timer_display()
         elif event.button.id == "back":
             self.timer_running = False
             self.app.pop_screen()
@@ -290,7 +528,11 @@ class PomodoroTimerScreen(Screen):
         while self.timer_running and self.time_left > 0:
             time.sleep(1)
             self.time_left -= 1
-            self.refresh()
+            self.call_from_thread(self.update_timer_display) # Use call_from_thread for UI updates
+
+    def update_timer_display(self):
+        mins, secs = divmod(self.time_left, 60)
+        self.query_one("#timer_display", Static).update(f"Pomodoro Timer: {mins:02d}:{secs:02d}")
 
 class BackgroundSelectorScreen(Screen):
     def compose(self) -> ComposeResult:
@@ -344,16 +586,24 @@ class FileBrowserScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Static(f"Current Directory: {self.path}")
         yield Button("..", id="parent_dir") # Button to go up one directory
+        yield Button("New File", id="new_file") # Button to create a new file
 
         try:
-            for item in os.listdir(self.path):
-                full_path = os.path.join(self.path, item)
-                if os.path.isdir(full_path):
-                    yield Button(f"DIR: {item}", id=f"dir_{item}")
-                else:
-                    yield Button(f"FILE: {item}", id=f"file_{item}")
+            items = os.listdir(self.path)
+            # Sort directories first, then files
+            dirs = sorted([item for item in items if os.path.isdir(os.path.join(self.path, item))])
+            files = sorted([item for item in items if os.path.isfile(os.path.join(self.path, item))])
+
+            for item in dirs:
+                yield Button(f"DIR: {item}", id=f"dir_{item}")
+            for item in files:
+                yield Button(f"FILE: {item}", id=f"file_{item}")
+        except PermissionError:
+            yield Static("Permission denied to access this directory.", id="file_browser_status")
+        except FileNotFoundError:
+            yield Static("Directory not found.", id="file_browser_status")
         except Exception as e:
-            yield Static(f"Error: {e}")
+            yield Static(f"Error: {e}", id="file_browser_status")
 
         yield Button("Back", id="back")
 
@@ -369,33 +619,15 @@ class FileBrowserScreen(Screen):
             self.path = os.path.join(self.path, dir_name)
             self.clear_screen()
             self.compose()
+        elif event.button.id == "new_file":
+            self.app.push_screen(NanoEditorScreen()) # Open Nano Editor for a new file
         elif event.button.id.startswith("file_"):
             file_name = event.button.id[5:]
-            # For now, just display file content. Later, integrate with Nano Editor.
-            try:
-                with open(os.path.join(self.path, file_name), "r") as f:
-                    content = f.read()
-                self.app.push_screen(FileContentScreen(file_name, content))
-            except Exception as e:
-                self.query_one(Static).update(f"Error reading file: {e}")
+            self.app.push_screen(NanoEditorScreen(path=os.path.join(self.path, file_name)))
 
     def clear_screen(self):
         for widget in self.query():
             widget.remove()
-
-class FileContentScreen(Screen):
-    def __init__(self, filename, content):
-        super().__init__()
-        self.filename = filename
-        self.content = content
-
-    def compose(self) -> ComposeResult:
-        yield Static(f"--- {self.filename} ---\n\n{self.content}")
-        yield Button("Back", id="back")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.app.pop_screen()
 
 class CalculatorScreen(Screen):
     def __init__(self):
@@ -403,8 +635,8 @@ class CalculatorScreen(Screen):
         self.expression = ""
 
     def compose(self) -> ComposeResult:
-        yield Input(placeholder="Enter expression...", id="expression")
-        yield Static("", id="result")
+        yield Input(value=self.expression, placeholder="Enter expression...", id="expression_input")
+        yield Static("Result: ", id="result_display")
         yield Horizontal(
             Button("7", id="btn_7"), Button("8", id="btn_8"), Button("9", id="btn_9"), Button("/", id="btn_divide"),
         )
@@ -426,30 +658,30 @@ class CalculatorScreen(Screen):
             self.app.pop_screen()
         elif button_id == "btn_clear":
             self.expression = ""
-            self.query_one("#expression", Input).value = ""
-            self.query_one("#result", Static).update("")
+            self.query_one("#expression_input", Input).value = ""
+            self.query_one("#result_display", Static).update("Result: ")
         elif button_id == "equals":
             try:
+                # Evaluate the expression
                 result = str(eval(self.expression))
-                self.query_one("#result", Static).update(result)
-            except Exception as e:
-                self.query_one("#result", Static).update("Error")
-            self.expression = ""
+                self.query_one("#result_display", Static).update(f"Result: {result}")
+                self.expression = result # Set expression to result for chained operations
+                self.query_one("#expression_input", Input).value = self.expression
+            except Exception:
+                self.query_one("#result_display", Static).update("Result: Error")
+                self.expression = "" # Clear expression on error
+                self.query_one("#expression_input", Input).value = ""
         else:
-            # Extract the numeric or operator part from the button_id
+            # Append the appropriate character to the expression
             if button_id.startswith("btn_"):
-                self.expression += button_id[4:]
-            elif button_id.startswith("btn_divide"):
-                self.expression += "/"
-            elif button_id.startswith("btn_multiply"):
-                self.expression += "*"
-            elif button_id.startswith("btn_subtract"):
-                self.expression += "-"
-            elif button_id.startswith("btn_add"):
-                self.expression += "+"
-            elif button_id.startswith("btn_dot"):
-                self.expression += "."
-            self.query_one("#expression", Input).value = self.expression
+                char_to_add = button_id[4:]
+                if char_to_add == "divide": char_to_add = "/"
+                elif char_to_add == "multiply": char_to_add = "*"
+                elif char_to_add == "subtract": char_to_add = "-"
+                elif char_to_add == "add": char_to_add = "+"
+                elif char_to_add == "dot": char_to_add = "."
+                self.expression += char_to_add
+            self.query_one("#expression_input", Input).value = self.expression
 
 if __name__ == "__main__":
     ZeldaTUIOS().run()

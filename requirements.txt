@@ -1,2 +1,4 @@
 textual
 requests
+httpx
+python-dotenv
