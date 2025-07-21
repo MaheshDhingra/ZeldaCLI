@@ -1,4 +1,4 @@
-textual
-requests
-httpx
+rich
 python-dotenv
+psutil
+textual
