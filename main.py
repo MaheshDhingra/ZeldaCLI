@@ -16,6 +16,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv # Import load_dotenv
+import html2text # Import html2text
 
 # Load environment variables from .env file
 load_dotenv()
@@ -252,7 +253,6 @@ class MazeWidget(Static):
 
 class BaseScreen(Screen):
     def compose(self) -> ComposeResult:
-        yield Header()
         yield Footer()
         yield from self.body() # Placeholder for screen-specific content
 
@@ -338,6 +338,7 @@ class DashboardScreen(BaseScreen): # Renamed from MainMenu
         pass # No specific mount logic for dashboard itself, widgets handle their own updates
 
     def body(self) -> ComposeResult:
+        yield Static("Zelda TUI OS - Dashboard", id="dashboard_test_message", classes="dashboard_message")
         yield Horizontal(
             Vertical(
                 ClockWidget(id="dashboard_clock_widget") if self.app.enabled_widgets["clock"] else Static(""),
@@ -921,13 +922,20 @@ class WebBrowserScreen(BaseScreen):
                 try:
                     self.query_one("#browser_status", Static).update(f"Fetching: {display_url}")
                     response = requests.get(display_url, timeout=5) # Add a timeout
-                    self.query_one("#browser_content", Static).update(response.text)
+                    
+                    # Convert HTML to Markdown for better TUI display
+                    h = html2text.HTML2Text()
+                    h.ignore_links = False
+                    h.ignore_images = True
+                    markdown_content = h.handle(response.text)
+                    
+                    self.query_one("#browser_content", Static).update(markdown_content)
                     self.query_one("#browser_status", Static).update(f"Displaying: {display_url}")
                 except requests.exceptions.RequestException as e:
-                    self.query_one("#browser_content", Static).update(f"Error fetching URL: {e}\n\nNote: A full TUI web browser is a complex feature requiring a dedicated rendering engine. This is a placeholder.")
+                    self.query_one("#browser_content", Static).update(f"Error fetching URL: {e}\n\nNote: A full TUI web browser is a complex feature requiring a dedicated rendering engine. This is a placeholder. Ensure 'html2text' is installed via 'pip install html2text'.")
                     self.query_one("#browser_status", Static).update("Error fetching URL.")
                 except Exception as e:
-                    self.query_one("#browser_content", Static).update(f"An unexpected error occurred: {e}\n\nNote: A full TUI web browser is a complex feature requiring a dedicated rendering engine. This is a placeholder.")
+                    self.query_one("#browser_content", Static).update(f"An unexpected error occurred: {e}\n\nNote: A full TUI web browser is a complex feature requiring a dedicated rendering engine. This is a placeholder. Ensure 'html2text' is installed via 'pip install html2text'.")
                     self.query_one("#browser_status", Static).update("An unexpected error occurred.")
             else:
                 self.query_one("#browser_content", Static).update("Please enter a URL.")
@@ -1038,7 +1046,9 @@ class FileBrowserScreen(BaseScreen):
             for item in dirs:
                 yield Button(f"DIR: {item}", id=f"dir_{item}")
             for item in files:
-                yield Button(f"FILE: {item}", id=f"file_{item}")
+                # Replace dots with hyphens for valid Textual IDs
+                safe_item_id = item.replace('.', '-')
+                yield Button(f"FILE: {item}", id=f"file_{safe_item_id}")
         except PermissionError:
             yield Static("Permission denied to access this directory.", id="file_browser_status")
         except FileNotFoundError:
@@ -1063,8 +1073,21 @@ class FileBrowserScreen(BaseScreen):
         elif event.button.id == "new_file":
             self.app.push_screen(NanoEditorScreen()) # Open Nano Editor for a new file
         elif event.button.id.startswith("file_"):
-            file_name = event.button.id[5:]
-            self.app.push_screen(NanoEditorScreen(path=os.path.join(self.path, file_name)))
+            # Reconstruct original file name from safe ID
+            safe_file_id = event.button.id[5:]
+            # Assuming original file names might have dots, this is a simplification.
+            # A more robust solution might store original names in a dictionary.
+            # For now, we'll try to find the original name from the directory listing.
+            original_file_name = None
+            for item in os.listdir(self.path):
+                if os.path.isfile(os.path.join(self.path, item)) and item.replace('.', '-') == safe_file_id:
+                    original_file_name = item
+                    break
+            
+            if original_file_name:
+                self.app.push_screen(NanoEditorScreen(path=os.path.join(self.path, original_file_name)))
+            else:
+                self.query_one("#file_browser_status", Static).update(f"Error: Could not find original file for ID {safe_file_id}")
 
     def clear_screen(self):
         for widget in self.query():

@@ -1,4 +1,5 @@
 textual
-requests
 httpx
+requests
 python-dotenv
+html2text
