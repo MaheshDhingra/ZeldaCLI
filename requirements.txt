@@ -1,4 +1,12 @@
+<<<<<<< HEAD
 rich
 python-dotenv
 psutil
 textual
+=======
+textual
+httpx
+requests
+python-dotenv
+html2text
+>>>>>>> 19b4035a0a96d4d26b0a7347b39c7a1cc84e0e86
