@@ -1,6 +1,5 @@
 import os
 import json
-<<<<<<< HEAD
 from dotenv import load_dotenv
 from textual.app import App, ComposeResult
 from textual.widgets import Static, Button, Header, Footer, Input, Label, ListView, ListItem
@@ -12,14 +11,6 @@ import psutil
 import subprocess
 import calendar
 from textual.screen import Screen
-=======
-import random
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from dotenv import load_dotenv # Import load_dotenv
-import html2text # Import html2text
->>>>>>> 19b4035a0a96d4d26b0a7347b39c7a1cc84e0e86
 
 load_dotenv()
 
@@ -27,133 +18,6 @@ CONFIG_DIR = "users"
 if not os.path.exists(CONFIG_DIR):
     os.makedirs(CONFIG_DIR)
 
-<<<<<<< HEAD
-THEMES = {
-    "retro": {
-        "background": "#181818",
-        "foreground": "#e0e0e0",
-        "primary": "#00ffae",
-        "secondary": "#ff00c8",
-        "accent": "#ffd700",
-        "error": "#ff5555",
-        "success": "#50fa7b",
-        "warning": "#f1fa8c",
-        "info": "#8be9fd",
-    },
-    "dark": {
-        "background": "#222831",
-        "foreground": "#eeeeee",
-        "primary": "#00adb5",
-        "secondary": "#393e46",
-        "accent": "#ffd369",
-        "error": "#ff5555",
-        "success": "#50fa7b",
-        "warning": "#f1fa8c",
-        "info": "#8be9fd",
-    },
-    "light": {
-        "background": "#f8f8f8",
-        "foreground": "#222831",
-        "primary": "#00adb5",
-        "secondary": "#393e46",
-        "accent": "#ffd369",
-        "error": "#ff5555",
-        "success": "#50fa7b",
-        "warning": "#f1fa8c",
-        "info": "#8be9fd",
-    },
-}
-
-ASCII_ARTS = {
-    "triforce": r"""
-      ▲
-     ▲ ▲
-    ▲▲▲▲▲
-    """,
-    "zelda": r"""
-   ______      _     _        _____ _     ___  ___ ___ 
-  |___  /     | |   | |      /  __ \ |    |  \/  ||  \
-     / / _ __ | |__ | |_ ___ | /  \/ |    | .  . || . \
-    / / | '_ \| '_ \| __/ _ \| |   | |    | |\/| || |\/|
-  ./ /__| | | | | | | || (_) | \__/\ |____| |  | || |  |
-  \____/_| |_|_| |_|\__\___/ \____/\_____/_|  |_/\_|  |_/
-    """
-}
-
-# --- Utility: Save/Load Config ---
-def user_config_path(username):
-    return os.path.join(CONFIG_DIR, f"{username}_config.json")
-
-def user_notes_path(username):
-    return os.path.join(CONFIG_DIR, f"{username}_notes.txt")
-
-def user_reminders_path(username):
-    return os.path.join(CONFIG_DIR, f"{username}_reminders.json")
-
-def save_config(username, data):
-    with open(user_config_path(username), "w") as f:
-        json.dump(data, f)
-
-def load_config(username):
-    path = user_config_path(username)
-    if os.path.exists(path):
-        with open(path) as f:
-            return json.load(f)
-    return {}
-
-def save_notes(username, notes):
-    with open(user_notes_path(username), "w", encoding="utf-8") as f:
-        f.write(notes)
-
-def load_notes(username):
-    path = user_notes_path(username)
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            return f.read()
-    return ""
-
-def save_reminders(username, reminders):
-    with open(user_reminders_path(username), "w", encoding="utf-8") as f:
-        json.dump(reminders, f)
-
-def load_reminders(username):
-    path = user_reminders_path(username)
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    return []
-
-# --- Login Screen ---
-class LoginScreen(Screen):
-    def compose(self) -> ComposeResult:
-        yield Vertical(
-            Label("[b][#ffd700]ZeldaCLI OS Login[/]"),
-            Input(placeholder="Enter username...", id="user_input")
-        )
-    def on_input_submitted(self, event: Input.Submitted):
-        username = event.value.strip()
-        if username:
-            self.app.login(username)
-            self.app.pop_screen()
-
-# --- Custom Notification System ---
-class NotificationBar(Static):
-    def __init__(self, message, style, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.message = message
-        self.style = style
-    def compose(self) -> ComposeResult:
-        yield Label(f"[{self.style}] {self.message}")
-
-# --- Notification Helper ---
-def notify(app, message, style="info"):
-    app.notifications.append({"message": message, "style": style})
-    bar = NotificationBar(message, style)
-    # Try to mount before #desktop on the main screen, else mount on the current screen
-    try:
-        app.mount(bar, before="#desktop")
-    except Exception:
-=======
 async def get_weather():
     api_key = os.getenv("OPENWEATHERMAP_API_KEY")
     city = os.getenv("DEFAULT_CITY", "London") # Use DEFAULT_CITY from .env
@@ -1167,7 +1031,6 @@ class FileBrowserScreen(BaseScreen):
         yield Button("..", id="parent_dir") # Button to go up one directory
         yield Button("New File", id="new_file") # Button to create a new file
 
->>>>>>> 19b4035a0a96d4d26b0a7347b39c7a1cc84e0e86
         try:
             app.screen.mount(bar)
         except Exception:
@@ -1179,7 +1042,6 @@ class FileBrowserScreen(BaseScreen):
             pass
     app.set_timer(2.5, remove_bar)
 
-<<<<<<< HEAD
 # --- Notification Center ---
 class NotificationCenter(Static):
     def on_mount(self):
@@ -1194,20 +1056,6 @@ class NotificationCenter(Static):
         if event.button.id == "clearall":
             self.app.notifications = []
             self.refresh()
-=======
-            for item in dirs:
-                yield Button(f"DIR: {item}", id=f"dir_{item}")
-            for item in files:
-                # Replace dots with hyphens for valid Textual IDs
-                safe_item_id = item.replace('.', '-')
-                yield Button(f"FILE: {item}", id=f"file_{safe_item_id}")
-        except PermissionError:
-            yield Static("Permission denied to access this directory.", id="file_browser_status")
-        except FileNotFoundError:
-            yield Static("Directory not found.", id="file_browser_status")
-        except Exception as e:
-            yield Static(f"Error: {e}", id="file_browser_status")
->>>>>>> 19b4035a0a96d4d26b0a7347b39c7a1cc84e0e86
 
 # --- Desktop Shortcuts/Favorites ---
 class DesktopShortcut(Button):
@@ -1218,7 +1066,6 @@ class DesktopShortcut(Button):
     def on_button_pressed(self, event: Button.Pressed):
         self.app.open_favorite(self.widget_name)
 
-<<<<<<< HEAD
 # --- Demo Widgets ---
 class ClosableWidget(Container):
     dragging = reactive(False)
@@ -1247,51 +1094,6 @@ class ClosableWidget(Container):
         self.styles.offset = (self.pos_x, self.pos_y)
         self.styles.display = "block"
     def compose(self) -> ComposeResult:
-=======
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.app.pop_screen()
-        elif event.button.id == "parent_dir":
-            self.path = os.path.dirname(self.path)
-            self.clear_screen()
-            self.compose()
-        elif event.button.id.startswith("dir_"):
-            dir_name = event.button.id[4:]
-            self.path = os.path.join(self.path, dir_name)
-            self.clear_screen()
-            self.compose()
-        elif event.button.id == "new_file":
-            self.app.push_screen(NanoEditorScreen()) # Open Nano Editor for a new file
-        elif event.button.id.startswith("file_"):
-            # Reconstruct original file name from safe ID
-            safe_file_id = event.button.id[5:]
-            # Assuming original file names might have dots, this is a simplification.
-            # A more robust solution might store original names in a dictionary.
-            # For now, we'll try to find the original name from the directory listing.
-            original_file_name = None
-            for item in os.listdir(self.path):
-                if os.path.isfile(os.path.join(self.path, item)) and item.replace('.', '-') == safe_file_id:
-                    original_file_name = item
-                    break
-            
-            if original_file_name:
-                self.app.push_screen(NanoEditorScreen(path=os.path.join(self.path, original_file_name)))
-            else:
-                self.query_one("#file_browser_status", Static).update(f"Error: Could not find original file for ID {safe_file_id}")
-
-    def clear_screen(self):
-        for widget in self.query():
-            widget.remove()
-
-class CalculatorScreen(BaseScreen):
-    def __init__(self):
-        super().__init__()
-        self.expression = ""
-
-    def body(self) -> ComposeResult:
-        yield Input(value=self.expression, placeholder="Enter expression...", id="expression_input")
-        yield Static("Result: ", id="result_display")
->>>>>>> 19b4035a0a96d4d26b0a7347b39c7a1cc84e0e86
         yield Horizontal(
             Label(f"[b]{self.title}", id="titlebar"),
             Button("_", id="minbtn"),
