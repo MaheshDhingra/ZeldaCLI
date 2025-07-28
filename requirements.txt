@@ -1,5 +1,4 @@
-textual
-httpx
-requests
+psycopg2-binary
 python-dotenv
-html2text
+bcrypt
+textual

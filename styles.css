@@ -1,0 +1,46 @@
+Screen {
+    align: center middle;
+}
+
+.title {
+    text-align: center;
+    text-style: bold;
+    color: #0891b2;
+}
+
+Button {
+    width: 80%;
+}
+
+Input {
+    width: 80%;
+}
+
+Label {
+    width: 80%;
+    text-align: left;
+}
+
+.message {
+    color: #e2e8f0;
+    text-align: center;
+}
+
+.results {
+    border: solid #475569;
+    padding: 1;
+    width: 80%;
+    height: auto;
+    max-height: 20;
+    overflow-y: scroll;
+}
+
+VerticalScroll {
+    align: center top;
+    padding: 1 2;
+}
+
+Horizontal {
+    width: 100%;
+    align: center middle;
+}
