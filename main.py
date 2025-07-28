@@ -6,7 +6,7 @@ import random
 import datetime
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Button, Input, Label, Static
-from textual.containers import VerticalScroll, Vertical, Horizontal
+from textual.containers import Vertical
 from textual.screen import Screen
 
 load_dotenv()
@@ -48,7 +48,16 @@ def create_tables():
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
+        DROP TABLE IF EXISTS chats CASCADE;
+        DROP TABLE IF EXISTS money_requests CASCADE;
+        DROP TABLE IF EXISTS loan_payments CASCADE;
+        DROP TABLE IF EXISTS loans CASCADE;
+        DROP TABLE IF EXISTS cards CASCADE;
+        DROP TABLE IF EXISTS transactions CASCADE;
+        DROP TABLE IF EXISTS accounts CASCADE;
+        DROP TABLE IF EXISTS users CASCADE;
+
+        CREATE TABLE users (
             id SERIAL PRIMARY KEY,
             username VARCHAR(50) UNIQUE NOT NULL,
             password_hash VARCHAR(255) NOT NULL,
@@ -96,7 +105,8 @@ def create_tables():
             id SERIAL PRIMARY KEY,
             loan_id INTEGER REFERENCES loans(id),
             amount DECIMAL(10, 2) NOT NULL,
-            payment_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_public BOOLEAN DEFAULT FALSE
         );
         CREATE TABLE IF NOT EXISTS money_requests (
             id SERIAL PRIMARY KEY,
@@ -505,7 +515,7 @@ class MainScreen(Screen):
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll(classes="main-screen-content"):
+        with Vertical(classes="main-screen-content"):
             yield Label("--- Welcome to Internet Banking ---", classes="title")
             yield Button("Register", id="register_button", variant="primary")
             yield Button("Login", id="login_button", variant="primary")
