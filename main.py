@@ -3,7 +3,7 @@ import json
 from dotenv import load_dotenv
 from textual.app import App, ComposeResult
 from textual.widgets import Static, Button, Header, Footer, Input, Label, ListView, ListItem
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical, GridLayout
 from textual.reactive import reactive, var
 from textual import events
 import time
@@ -954,7 +954,9 @@ class NotificationCenter(Static):
 # --- Desktop Shortcuts/Favorites ---
 class DesktopShortcut(Button):
     def __init__(self, widget_name, icon, *args, **kwargs):
-        super().__init__(f"{icon} {widget_name}", id=f"shortcut_{widget_name.lower()}", *args, **kwargs)
+        # Replace spaces with underscores for valid Textual IDs
+        safe_widget_name = widget_name.lower().replace(' ', '_')
+        super().__init__(f"{icon} {widget_name}", id=f"shortcut_{safe_widget_name}", *args, **kwargs)
         self.widget_name = widget_name
         self.icon = icon
     def on_button_pressed(self, event: Button.Pressed):
@@ -1317,6 +1319,11 @@ class Dashboard(Desktop):
         # Add a Static widget for ASCII art if it exists
         if self.app.ascii_art:
             yield Static(self.app.ascii_art, id="ascii_art_display")
+
+        # Display desktop shortcuts for all available apps
+        shortcuts = [DesktopShortcut(name, icon) for name, _, icon in self.app.all_apps_list]
+        yield GridLayout(*shortcuts)
+
         for app in self.app.open_apps:
             yield app["widget"]
 
@@ -1325,26 +1332,13 @@ class AppLauncherMenu(Horizontal):
     def __init__(self, app):
         super().__init__()
         self._app = app
-        self.apps = [
-            ("Weather", WeatherWidget, "☁️"),
-            ("Time", TimeWidget, "🕒"),
-            ("Notes", NotesWidget, "📝"),
-            ("File Explorer", FileExplorerWidget, "📁"),
-            ("Calculator", CalculatorWidget, "🧮"),
-            ("Terminal", TerminalWidget, "💻"),
-            ("Reminders", RemindersWidget, "⏰"),
-            ("Calendar", CalendarWidget, "📅"),
-            ("Web Browser", WebBrowserScreen, "🌐"),
-            ("Tic-Tac-Toe", TicTacToeScreen, "❌⭕"),
-            ("Help/About", HelpScreen, "❓"),
-        ]
     def compose(self) -> ComposeResult:
-        for name, _, icon in self.apps:
-            safe_id = f"launch_{name.replace(' ', '_').replace('/', '_')}" # Replaced / with _
+        for name, _, icon in self._app.all_apps_list:
+            safe_id = f"launch_{name.replace(' ', '_').replace('/', '_')}"
             yield Button(f"{icon} {name}", id=safe_id)
     def on_button_pressed(self, event):
-        for name, widget_cls, _ in self.apps:
-            safe_id = f"launch_{name.replace(' ', '_').replace('/', '_')}" # Replaced / with _
+        for name, widget_cls, _ in self._app.all_apps_list:
+            safe_id = f"launch_{name.replace(' ', '_').replace('/', '_')}"
             if event.button.id == safe_id:
                 self._app.open_app(widget_cls, name)
                 self.remove()
@@ -1353,16 +1347,14 @@ class AppLauncherMenu(Horizontal):
 # --- Taskbar ---
 class Taskbar(Horizontal):
     def compose(self) -> ComposeResult:
-        yield Button("🪟", id="os_icon", variant="default")
+        # Removed the window icon button as requested
         for app in self.app.open_apps:
             yield Button(f"{self.app.widget_icon(app['title'])} {app['title']}", id=f"task_{app['title']}", variant="primary" if app['focused'] else "default")
         yield Static(" ", id="spacer")
         yield Static(f"🕒 {self.app.system_time}", id="tray_clock")
         yield Button("🔔", id="tray_notif", variant="default")
     def on_button_pressed(self, event: Button.Pressed):
-        if event.button.id == "os_icon":
-            self.app.show_app_launcher()
-        elif event.button.id.startswith("task_"):
+        if event.button.id.startswith("task_"):
             app_title = event.button.id.replace("task_", "")
             self.app.focus_app(app_title)
         elif event.button.id == "tray_notif":
@@ -1381,15 +1373,6 @@ class TimeWidget(Static):
         from datetime import datetime
         now = datetime.now().strftime("%H:%M:%S")
         self.update(f"[b][#569cd6]🕒 {now}[/]")
-
-# --- Weather Widget (stub, can be expanded with real API) ---
-class WeatherWidget(Static):
-    def on_mount(self):
-        self.set_interval(600, self.refresh_weather)  # Update every 10 min
-        self.refresh_weather()
-    def refresh_weather(self):
-        # For now, just show a static message; can be replaced with real API call
-        self.update("[b][#b5d4ff]☁️ 24°C, Mostly Cloudy[/]")
 
 # --- ZeldaCLIOS App (major changes) ---
 class ZeldaCLIOS(App):
@@ -1414,7 +1397,27 @@ class ZeldaCLIOS(App):
     open_apps = reactive([])  # List of dicts: {title, widget, focused, minimized}
     focused_app = None
     system_time = reactive("")
+    all_apps_list = [
+        ("Weather", WeatherWidget, "☁️"),
+        ("Time", TimeWidget, "🕒"),
+        ("Notes", NotesWidget, "📝"),
+        ("File Explorer", FileExplorerWidget, "📁"),
+        ("Calculator", CalculatorScreen, "🧮"),
+        ("Terminal", TerminalWidget, "💻"),
+        ("Reminders", RemindersWidget, "⏰"),
+        ("Calendar", CalendarWidget, "📅"),
+        ("Web Browser", WebBrowserScreen, "🌐"),
+        ("Tic-Tac-Toe", TicTacToeScreen, "❌⭕"),
+        ("Chess Game", ChessScreen, "♟️"),
+        ("Maze Game", MazeGameScreen, "🗺️"),
+        ("Mail Service", MailScreen, "📧"),
+        ("Help/About", HelpScreen, "❓"),
+        ("App Store", WidgetGallery, "⭐"),
+        ("Settings", SettingsWidget, "⚙️"),
+        ("Background Selector", BackgroundSelectorScreen, "🖼️"),
+    ]
     def compose(self) -> ComposeResult:
+        yield Header()
         yield Dashboard(id="dashboard")
         yield Taskbar(id="taskbar")
         yield Footer()
@@ -1432,9 +1435,6 @@ class ZeldaCLIOS(App):
         self.calendar_events = []
         self.set_interval(1, self.update_system_time)
         self.push_screen(LoginScreen())
-        # Always open Weather and Time widgets on startup
-        self.open_app(WeatherWidget, "Weather")
-        self.open_app(TimeWidget, "Time")
         notify(self, "ZeldaCLI OS started!", "info")
     def update_system_time(self):
         from datetime import datetime
@@ -1463,7 +1463,7 @@ class ZeldaCLIOS(App):
                 return
 
         # If not open, create and add it
-        if title in ["Web Browser", "Tic-Tac-Toe", "Help_About", "Chess Game", "Maze Game", "Mail Service"]: # These are screens
+        if title in ["Web Browser", "Tic-Tac-Toe", "Help_About", "Calculator", "Chess Game", "Maze Game", "Mail Service"]: # These are screens
             self.push_screen(widget_cls())
         else: # These are desktop widgets
             new_widget_instance = widget_cls()
@@ -1471,6 +1471,7 @@ class ZeldaCLIOS(App):
             self.dashboard.mount(closable_widget)
             self.open_apps.append({"title": title, "widget": closable_widget, "focused": True, "minimized": False})
             self.focus_app(title) # Focus the newly added widget
+            self.dashboard.refresh() # Refresh the dashboard to show the new widget
         self.update_taskbar()
         self.refresh()
         self.save_layout()
@@ -1538,6 +1539,7 @@ class ZeldaCLIOS(App):
             return
         data = load_config(self.username)
         self.dashboard.remove_children()
+        self.open_apps = [] # Clear open apps on load
         self.running_widgets = set()
         self.favorites = data.get("favorites", ["Clock", "Notes"])
         self.avatar = data.get("avatar", ":)")
@@ -1547,48 +1549,27 @@ class ZeldaCLIOS(App):
             self.dashboard.background = self.background_color
             self.dashboard.ascii_art = data.get("ascii_art", "")
             self.user_theme = data.get("user_theme", "retro")
+            widget_map = {name: cls for name, cls, _ in self.all_apps_list if name not in ["Web Browser", "Tic-Tac-Toe", "Help/About", "Calculator", "Chess Game", "Maze Game", "Mail Service", "App Store", "Settings", "Background Selector"]}
             for w in data.get("widgets", []):
-                widget_map = {
-                    "Clock": ClockWidget,
-                    "SysMon": SysMonWidget,
-                    "Notes": NotesWidget,
-                    "File Explorer": FileExplorerWidget,
-                    "Calculator": CalculatorWidget,
-                    "Terminal": TerminalWidget,
-                    "Reminders": RemindersWidget,
-                    "Calendar": CalendarWidget,
-                }
-                widget_cls = widget_map.get(w["title"], ClockWidget)
-                self.open_app(widget_cls, w["title"], w["pos_x"], w["pos_y"], w["width"], w["height"])
+                widget_cls = widget_map.get(w["title"])
+                if widget_cls:
+                    self.open_app(widget_cls, w["title"], w["pos_x"], w["pos_y"], w["width"], w["height"])
         else:
+            # Default apps to open if no layout is saved
             self.open_app(ClockWidget, "Clock")
+            self.open_app(WeatherWidget, "Weather")
+
     def on_button_pressed(self, event: Button.Pressed):
-        if event.button.id == "clock":
-            self.open_app(ClockWidget, "Clock")
-        elif event.button.id == "sysmon":
-            self.open_app(SysMonWidget, "SysMon")
-        elif event.button.id == "notes":
-            self.open_app(NotesWidget, "Notes")
-        elif event.button.id == "fileexplorer":
-            self.open_app(FileExplorerWidget, "File Explorer")
-        elif event.button.id == "calc":
-            self.open_app(CalculatorWidget, "Calculator")
-        elif event.button.id == "terminal":
-            self.open_app(TerminalWidget, "Terminal")
-        elif event.button.id == "reminders":
-            self.open_app(RemindersWidget, "Reminders")
-        elif event.button.id == "calendar":
-            self.open_app(CalendarWidget, "Calendar")
-        elif event.button.id == "gallery":
-            self.open_app(WidgetGallery, "App Store")
-        elif event.button.id == "notifcenter":
-            self.open_app(NotificationCenter, "Notification Center")
-        elif event.button.id == "theme":
-            self.open_app(ThemeWidget, "Theme Switcher")
-        elif event.button.id == "settings":
-            self.open_app(SettingsWidget, "Settings")
+        # Handle clicks on desktop shortcuts
+        if event.button.id.startswith("shortcut_"):
+            widget_name = event.button.id.replace("shortcut_", "").replace("_", " ").title()
+            # Special handling for "Help About" to match "Help/About"
+            if widget_name == "Help About":
+                widget_name = "Help/About"
+            self.open_favorite(widget_name)
         elif event.button.id == "logout":
             self.logout()
+
     def toggle_favorite(self, widget_name):
         if widget_name in self.favorites:
             self.favorites.remove(widget_name)
@@ -1599,32 +1580,15 @@ class ZeldaCLIOS(App):
         self.save_layout()
         self.refresh()
     def open_favorite(self, widget_name):
-        widget_map = {
-            "Clock": ClockWidget,
-            "SysMon": SysMonWidget,
-            "Notes": NotesWidget,
-            "File Explorer": FileExplorerWidget,
-            "Calculator": CalculatorWidget,
-            "Terminal": TerminalWidget,
-            "Reminders": RemindersWidget,
-            "Calendar": CalendarWidget,
-        }
-        widget_cls = widget_map.get(widget_name, ClockWidget)
-        self.open_app(widget_cls, widget_name)
+        widget_map = {name: cls for name, cls, _ in self.all_apps_list}
+        widget_cls = widget_map.get(widget_name)
+        if widget_cls:
+            self.open_app(widget_cls, widget_name)
+        else:
+            notify(self, f"Unknown widget: {widget_name}", "error")
+
     def widget_icon(self, widget_name):
-        icons = {
-            "Clock": "🕒",
-            "SysMon": "🖥️",
-            "Notes": "📝",
-            "File Explorer": "📁",
-            "Calculator": "🧮",
-            "Terminal": "💻",
-            "Reminders": "⏰",
-            "Calendar": "📅",
-            "Web Browser": "🌐",
-            "Tic-Tac-Toe": "❌⭕",
-            "Help_About": "❓", # Changed "Help/About" to "Help_About"
-        }
+        icons = {name: icon for name, _, icon in self.all_apps_list}
         return icons.get(widget_name, "★")
     def action_open_notifcenter(self):
         self.open_app(NotificationCenter, "Notification Center")
