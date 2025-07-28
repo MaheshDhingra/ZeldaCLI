@@ -6,7 +6,7 @@ import random
 import datetime
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Button, Input, Label, Static
-from textual.containers import Vertical
+from textual.containers import VerticalScroll
 from textual.screen import Screen
 
 load_dotenv()
@@ -515,7 +515,7 @@ class MainScreen(Screen):
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="main-screen-content"):
+        with VerticalScroll(classes="main-screen-content"):
             yield Label("--- Welcome to Internet Banking ---", classes="title")
             yield Button("Register", id="register_button", variant="primary")
             yield Button("Login", id="login_button", variant="primary")
