@@ -35,9 +35,24 @@ Label {
     overflow-y: scroll;
 }
 
+.info_content {
+    width: 80%;
+    height: auto;
+    max-height: 20;
+    overflow-y: scroll;
+    border: solid #475569;
+    padding: 1;
+}
+
 VerticalScroll {
     align: center top;
     padding: 1 2;
+}
+
+.main-screen-content {
+    align: center middle;
+    width: 100%;
+    height: 100%;
 }
 
 Horizontal {

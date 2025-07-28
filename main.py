@@ -7,6 +7,7 @@ import datetime
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Button, Input, Label, Static
 from textual.containers import VerticalScroll, Vertical, Horizontal
+from textual.screen import Screen
 
 load_dotenv()
 
@@ -67,9 +68,10 @@ def create_tables():
         CREATE TABLE IF NOT EXISTS transactions (
             id SERIAL PRIMARY KEY,
             account_id INTEGER REFERENCES accounts(id),
-            type VARCHAR(10) NOT NULL,
+            type VARCHAR(20) NOT NULL, -- e.g., 'deposit', 'withdraw', 'transfer_in', 'transfer_out', 'public_transfer'
             amount DECIMAL(10, 2) NOT NULL,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_public BOOLEAN DEFAULT FALSE
         );
         CREATE TABLE IF NOT EXISTS cards (
             id SERIAL PRIMARY KEY,
@@ -104,10 +106,73 @@ def create_tables():
             status VARCHAR(20) DEFAULT 'pending',
             request_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS chats (
+            id SERIAL PRIMARY KEY,
+            from_user_id INTEGER REFERENCES users(id),
+            to_user_id INTEGER REFERENCES users(id),
+            message TEXT NOT NULL,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
     """)
     conn.commit()
     cur.close()
     conn.close()
+
+def transfer_funds(from_user_id, to_account_number, amount):
+    if amount <= 0:
+        return False, "Transfer amount must be positive."
+
+    from_account = get_user_account(from_user_id)
+    if not from_account:
+        return False, "Your account not found."
+
+    if from_account.balance < amount:
+        return False, "Insufficient balance."
+
+    to_account_id = get_account_id_by_account_number(to_account_number)
+    if not to_account_id:
+        return False, "Recipient account not found."
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # Deduct from sender
+        cur.execute("UPDATE accounts SET balance = balance - %s WHERE user_id = %s;", (amount, from_user_id))
+        record_transaction(get_account_id_by_user_id(from_user_id), 'transfer_out', amount)
+
+        # Add to recipient
+        cur.execute("UPDATE accounts SET balance = balance + %s WHERE id = %s;", (amount, to_account_id))
+        record_transaction(to_account_id, 'transfer_in', amount)
+
+        conn.commit()
+        return True, f"Successfully transferred ${amount:.2f} to account {to_account_number}."
+    except Exception as e:
+        conn.rollback()
+        return False, f"Transfer failed: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def view_transaction_history(user_id):
+    account_id = get_account_id_by_user_id(user_id)
+    if not account_id:
+        return "No account found for this user."
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT type, amount, timestamp FROM transactions WHERE account_id = %s ORDER BY timestamp DESC;", (account_id,))
+    transactions = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if transactions:
+        history = "\n--- Transaction History ---\n"
+        for t in transactions:
+            history += f"Type: {t[0].capitalize()}, Amount: ${t[1]:.2f}, Date: {t[2].strftime('%Y-%m-%d %H:%M:%S')}\n"
+        history += "--------------------------"
+        return history
+    else:
+        return "No transactions found for your account."
 
 def get_account_id_by_user_id(user_id):
     conn = get_db_connection()
@@ -198,10 +263,10 @@ def get_user_account(user_id):
         return BankAccount(user_id, account_data[1], float(account_data[2]))
     return None
 
-def record_transaction(account_id, type, amount):
+def record_transaction(account_id, type, amount, is_public=False):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("INSERT INTO transactions (account_id, type, amount) VALUES (%s, %s, %s);", (account_id, type, amount))
+    cur.execute("INSERT INTO transactions (account_id, type, amount, is_public) VALUES (%s, %s, %s, %s);", (account_id, type, amount, is_public))
     conn.commit()
     cur.close()
     conn.close()
@@ -434,17 +499,18 @@ def respond_to_money_request(request_id, user_id, action):
         cur.close()
         conn.close()
 
-class MainScreen(VerticalScroll):
+class MainScreen(Screen):
     def __init__(self, app_instance, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        yield Label("--- Welcome to Internet Banking ---", classes="title")
-        yield Button("Register", id="register_button", variant="primary")
-        yield Button("Login", id="login_button", variant="primary")
-        yield Button("Exit", id="exit_button", variant="error")
-        yield Label("", id="message_label", classes="message")
+        with VerticalScroll(classes="main-screen-content"):
+            yield Label("--- Welcome to Internet Banking ---", classes="title")
+            yield Button("Register", id="register_button", variant="primary")
+            yield Button("Login", id="login_button", variant="primary")
+            yield Button("Exit", id="exit_button", variant="error")
+            yield Label("", id="message_label", classes="message")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "register_button":
@@ -454,30 +520,31 @@ class MainScreen(VerticalScroll):
         elif event.button.id == "exit_button":
             self.app_instance.exit("Exiting. Goodbye!")
 
-class RegisterScreen(VerticalScroll):
+class RegisterScreen(Screen):
     def __init__(self, app_instance, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        yield Label("--- Register ---", classes="title")
-        yield Label("Username:")
-        yield Input(placeholder="Enter desired username", id="reg_username")
-        yield Label("Password:")
-        yield Input(placeholder="Enter desired password", password=True, id="reg_password")
-        yield Label("Full Name:")
-        yield Input(placeholder="Enter your full name", id="reg_full_name")
-        yield Label("Email:")
-        yield Input(placeholder="Enter your email", id="reg_email")
-        yield Label("Phone Number:")
-        yield Input(placeholder="Enter your phone number", id="reg_phone_number")
-        yield Label("Address:")
-        yield Input(placeholder="Enter your address", id="reg_address")
-        yield Label("Date of Birth (YYYY-MM-DD):")
-        yield Input(placeholder="YYYY-MM-DD", id="reg_dob")
-        yield Button("Register", id="submit_register", variant="primary")
-        yield Button("Back", id="back_to_main", variant="default")
-        yield Label("", id="reg_message_label", classes="message")
+        with VerticalScroll():
+            yield Label("--- Register ---", classes="title")
+            yield Label("Username:")
+            yield Input(placeholder="Enter desired username", id="reg_username")
+            yield Label("Password:")
+            yield Input(placeholder="Enter desired password", password=True, id="reg_password")
+            yield Label("Full Name:")
+            yield Input(placeholder="Enter your full name", id="reg_full_name")
+            yield Label("Email:")
+            yield Input(placeholder="Enter your email", id="reg_email")
+            yield Label("Phone Number:")
+            yield Input(placeholder="Enter your phone number", id="reg_phone_number")
+            yield Label("Address:")
+            yield Input(placeholder="Enter your address", id="reg_address")
+            yield Label("Date of Birth (YYYY-MM-DD):")
+            yield Input(placeholder="YYYY-MM-DD", id="reg_dob")
+            yield Button("Register", id="submit_register", variant="primary")
+            yield Button("Back", id="back_to_main", variant="default")
+            yield Label("", id="reg_message_label", classes="message")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "submit_register":
@@ -502,20 +569,21 @@ class RegisterScreen(VerticalScroll):
         elif event.button.id == "back_to_main":
             self.app_instance.pop_screen()
 
-class LoginScreen(VerticalScroll):
+class LoginScreen(Screen):
     def __init__(self, app_instance, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        yield Label("--- Login ---", classes="title")
-        yield Label("Username:")
-        yield Input(placeholder="Enter username", id="login_username")
-        yield Label("Password:")
-        yield Input(placeholder="Enter password", password=True, id="login_password")
-        yield Button("Login", id="submit_login", variant="primary")
-        yield Button("Back", id="back_to_main", variant="default")
-        yield Label("", id="login_message_label", classes="message")
+        with VerticalScroll():
+            yield Label("--- Login ---", classes="title")
+            yield Label("Username:")
+            yield Input(placeholder="Enter username", id="login_username")
+            yield Label("Password:")
+            yield Input(placeholder="Enter password", password=True, id="login_password")
+            yield Button("Login", id="submit_login", variant="primary")
+            yield Button("Back", id="back_to_main", variant="default")
+            yield Label("", id="login_message_label", classes="message")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "submit_login":
@@ -532,22 +600,23 @@ class LoginScreen(VerticalScroll):
         elif event.button.id == "back_to_main":
             self.app_instance.pop_screen()
 
-class MainMenuScreen(VerticalScroll):
+class MainMenuScreen(Screen):
     def __init__(self, app_instance, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        yield Label(f"--- Welcome, {self.app_instance.logged_in_username}! ---", classes="title")
-        yield Button("Account Operations", id="account_ops_button", variant="primary")
-        yield Button("Card Operations", id="card_ops_button", variant="primary")
-        yield Button("View Transaction History", id="view_transactions_button", variant="primary")
-        yield Button("Transfer Funds", id="transfer_funds_button", variant="primary")
-        yield Button("Loans", id="loans_button", variant="primary")
-        yield Button("Search Users", id="search_users_button", variant="primary")
-        yield Button("Money Requests", id="money_requests_button", variant="primary")
-        yield Button("Logout", id="logout_button", variant="error")
-        yield Label("", id="main_menu_message_label", classes="message")
+        with VerticalScroll():
+            yield Label(f"--- Welcome, {self.app_instance.logged_in_username}! ---", classes="title")
+            yield Button("Account Operations", id="account_ops_button", variant="primary")
+            yield Button("Card Operations", id="card_ops_button", variant="primary")
+            yield Button("View Transaction History", id="view_transactions_button", variant="primary")
+            yield Button("Transfer Funds", id="transfer_funds_button", variant="primary")
+            yield Button("Loans", id="loans_button", variant="primary")
+            yield Button("Search Users", id="search_users_button", variant="primary")
+            yield Button("Money Requests", id="money_requests_button", variant="primary")
+            yield Button("Logout", id="logout_button", variant="error")
+            yield Label("", id="main_menu_message_label", classes="message")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "account_ops_button":
@@ -571,18 +640,19 @@ class MainMenuScreen(VerticalScroll):
             self.app_instance.logged_in_full_name = None
             self.app_instance.pop_screen() # Go back to MainScreen
 
-class AccountOperationsScreen(VerticalScroll):
+class AccountOperationsScreen(Screen):
     def __init__(self, app_instance, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        yield Label("--- Account Operations ---", classes="title")
-        yield Button("Deposit", id="deposit_button", variant="primary")
-        yield Button("Withdraw", id="withdraw_button", variant="primary")
-        yield Button("View Balance", id="view_balance_button", variant="primary")
-        yield Button("Back", id="back_to_main_menu", variant="default")
-        yield Label("", id="account_ops_message_label", classes="message")
+        with VerticalScroll():
+            yield Label("--- Account Operations ---", classes="title")
+            yield Button("Deposit", id="deposit_button", variant="primary")
+            yield Button("Withdraw", id="withdraw_button", variant="primary")
+            yield Button("View Balance", id="view_balance_button", variant="primary")
+            yield Button("Back", id="back_to_main_menu", variant="default")
+            yield Label("", id="account_ops_message_label", classes="message")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         account = get_user_account(self.app_instance.logged_in_user_id)
@@ -599,19 +669,20 @@ class AccountOperationsScreen(VerticalScroll):
         elif event.button.id == "back_to_main_menu":
             self.app_instance.pop_screen()
 
-class DepositScreen(VerticalScroll):
+class DepositScreen(Screen):
     def __init__(self, app_instance, account, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
         self.account = account
 
     def compose(self) -> ComposeResult:
-        yield Label("--- Deposit ---", classes="title")
-        yield Label("Amount:")
-        yield Input(placeholder="Enter amount to deposit", id="deposit_amount", type="number")
-        yield Button("Deposit", id="submit_deposit", variant="primary")
-        yield Button("Back", id="back_to_account_ops", variant="default")
-        yield Label("", id="deposit_message_label", classes="message")
+        with VerticalScroll():
+            yield Label("--- Deposit ---", classes="title")
+            yield Label("Amount:")
+            yield Input(placeholder="Enter amount to deposit", id="deposit_amount", type="number")
+            yield Button("Deposit", id="submit_deposit", variant="primary")
+            yield Button("Back", id="back_to_account_ops", variant="default")
+            yield Label("", id="deposit_message_label", classes="message")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "submit_deposit":
@@ -627,19 +698,20 @@ class DepositScreen(VerticalScroll):
         elif event.button.id == "back_to_account_ops":
             self.app_instance.pop_screen()
 
-class WithdrawScreen(VerticalScroll):
+class WithdrawScreen(Screen):
     def __init__(self, app_instance, account, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
         self.account = account
 
     def compose(self) -> ComposeResult:
-        yield Label("--- Withdraw ---", classes="title")
-        yield Label("Amount:")
-        yield Input(placeholder="Enter amount to withdraw", id="withdraw_amount", type="number")
-        yield Button("Withdraw", id="submit_withdraw", variant="primary")
-        yield Button("Back", id="back_to_account_ops", variant="default")
-        yield Label("", id="withdraw_message_label", classes="message")
+        with VerticalScroll():
+            yield Label("--- Withdraw ---", classes="title")
+            yield Label("Amount:")
+            yield Input(placeholder="Enter amount to withdraw", id="withdraw_amount", type="number")
+            yield Button("Withdraw", id="submit_withdraw", variant="primary")
+            yield Button("Back", id="back_to_account_ops", variant="default")
+            yield Label("", id="withdraw_message_label", classes="message")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "submit_withdraw":
@@ -655,18 +727,19 @@ class WithdrawScreen(VerticalScroll):
         elif event.button.id == "back_to_account_ops":
             self.app_instance.pop_screen()
 
-class CardOperationsScreen(VerticalScroll):
+class CardOperationsScreen(Screen):
     def __init__(self, app_instance, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        yield Label("--- Card Operations ---", classes="title")
-        yield Button("Generate Debit Card", id="gen_debit_card_button", variant="primary")
-        yield Button("Generate Credit Card", id="gen_credit_card_button", variant="primary")
-        yield Button("View My Cards", id="view_cards_button", variant="primary")
-        yield Button("Back", id="back_to_main_menu", variant="default")
-        yield Label("", id="card_ops_message_label", classes="message")
+        with VerticalScroll():
+            yield Label("--- Card Operations ---", classes="title")
+            yield Button("Generate Debit Card", id="gen_debit_card_button", variant="primary")
+            yield Button("Generate Credit Card", id="gen_credit_card_button", variant="primary")
+            yield Button("View My Cards", id="view_cards_button", variant="primary")
+            yield Button("Back", id="back_to_main_menu", variant="default")
+            yield Label("", id="card_ops_message_label", classes="message")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "gen_debit_card_button":
@@ -681,20 +754,21 @@ class CardOperationsScreen(VerticalScroll):
         elif event.button.id == "back_to_main_menu":
             self.app_instance.pop_screen()
 
-class TransferFundsScreen(VerticalScroll):
+class TransferFundsScreen(Screen):
     def __init__(self, app_instance, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        yield Label("--- Transfer Funds ---", classes="title")
-        yield Label("Recipient's Account Number:")
-        yield Input(placeholder="Enter recipient's account number", id="to_account_number")
-        yield Label("Amount:")
-        yield Input(placeholder="Enter amount to transfer", id="transfer_amount", type="number")
-        yield Button("Transfer", id="submit_transfer", variant="primary")
-        yield Button("Back", id="back_to_main_menu", variant="default")
-        yield Label("", id="transfer_message_label", classes="message")
+        with VerticalScroll():
+            yield Label("--- Transfer Funds ---", classes="title")
+            yield Label("Recipient's Account Number:")
+            yield Input(placeholder="Enter recipient's account number", id="to_account_number")
+            yield Label("Amount:")
+            yield Input(placeholder="Enter amount to transfer", id="transfer_amount", type="number")
+            yield Button("Transfer", id="submit_transfer", variant="primary")
+            yield Button("Back", id="back_to_main_menu", variant="default")
+            yield Label("", id="transfer_message_label", classes="message")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "submit_transfer":
@@ -708,18 +782,19 @@ class TransferFundsScreen(VerticalScroll):
         elif event.button.id == "back_to_main_menu":
             self.app_instance.pop_screen()
 
-class LoansScreen(VerticalScroll):
+class LoansScreen(Screen):
     def __init__(self, app_instance, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        yield Label("--- Loan Operations ---", classes="title")
-        yield Button("Apply for Loan", id="apply_loan_button", variant="primary")
-        yield Button("View My Loans", id="view_loans_button", variant="primary")
-        yield Button("Make Loan Payment", id="make_loan_payment_button", variant="primary")
-        yield Button("Back", id="back_to_main_menu", variant="default")
-        yield Label("", id="loans_message_label", classes="message")
+        with VerticalScroll():
+            yield Label("--- Loan Operations ---", classes="title")
+            yield Button("Apply for Loan", id="apply_loan_button", variant="primary")
+            yield Button("View My Loans", id="view_loans_button", variant="primary")
+            yield Button("Make Loan Payment", id="make_loan_payment_button", variant="primary")
+            yield Button("Back", id="back_to_main_menu", variant="default")
+            yield Label("", id="loans_message_label", classes="message")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "apply_loan_button":
@@ -732,22 +807,23 @@ class LoansScreen(VerticalScroll):
         elif event.button.id == "back_to_main_menu":
             self.app_instance.pop_screen()
 
-class ApplyLoanScreen(VerticalScroll):
+class ApplyLoanScreen(Screen):
     def __init__(self, app_instance, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        yield Label("--- Apply for Loan ---", classes="title")
-        yield Label("Loan Amount:")
-        yield Input(placeholder="Enter loan amount", id="loan_amount", type="number")
-        yield Label("Annual Interest Rate (e.g., 0.05 for 5%):")
-        yield Input(placeholder="Enter interest rate", id="interest_rate", type="number")
-        yield Label("Loan Term in Months:")
-        yield Input(placeholder="Enter loan term", id="term_months", type="number")
-        yield Button("Apply", id="submit_loan_application", variant="primary")
-        yield Button("Back", id="back_to_loans", variant="default")
-        yield Label("", id="apply_loan_message_label", classes="message")
+        with VerticalScroll():
+            yield Label("--- Apply for Loan ---", classes="title")
+            yield Label("Loan Amount:")
+            yield Input(placeholder="Enter loan amount", id="loan_amount", type="number")
+            yield Label("Annual Interest Rate (e.g., 0.05 for 5%):")
+            yield Input(placeholder="Enter interest rate", id="interest_rate", type="number")
+            yield Label("Loan Term in Months:")
+            yield Input(placeholder="Enter loan term", id="term_months", type="number")
+            yield Button("Apply", id="submit_loan_application", variant="primary")
+            yield Button("Back", id="back_to_loans", variant="default")
+            yield Label("", id="apply_loan_message_label", classes="message")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "submit_loan_application":
@@ -764,20 +840,21 @@ class ApplyLoanScreen(VerticalScroll):
         elif event.button.id == "back_to_loans":
             self.app_instance.pop_screen()
 
-class MakeLoanPaymentScreen(VerticalScroll):
+class MakeLoanPaymentScreen(Screen):
     def __init__(self, app_instance, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        yield Label("--- Make Loan Payment ---", classes="title")
-        yield Label("Loan ID:")
-        yield Input(placeholder="Enter Loan ID", id="loan_id", type="number")
-        yield Label("Payment Amount:")
-        yield Input(placeholder="Enter payment amount", id="payment_amount", type="number")
-        yield Button("Make Payment", id="submit_loan_payment", variant="primary")
-        yield Button("Back", id="back_to_loans", variant="default")
-        yield Label("", id="make_payment_message_label", classes="message")
+        with VerticalScroll():
+            yield Label("--- Make Loan Payment ---", classes="title")
+            yield Label("Loan ID:")
+            yield Input(placeholder="Enter Loan ID", id="loan_id", type="number")
+            yield Label("Payment Amount:")
+            yield Input(placeholder="Enter payment amount", id="payment_amount", type="number")
+            yield Button("Make Payment", id="submit_loan_payment", variant="primary")
+            yield Button("Back", id="back_to_loans", variant="default")
+            yield Label("", id="make_payment_message_label", classes="message")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "submit_loan_payment":
@@ -793,19 +870,20 @@ class MakeLoanPaymentScreen(VerticalScroll):
         elif event.button.id == "back_to_loans":
             self.app_instance.pop_screen()
 
-class SearchUsersScreen(VerticalScroll):
+class SearchUsersScreen(Screen):
     def __init__(self, app_instance, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        yield Label("--- Search Users ---", classes="title")
-        yield Label("Search Query (username or full name):")
-        yield Input(placeholder="Enter search query", id="search_query")
-        yield Button("Search", id="submit_search_users", variant="primary")
-        yield Button("Back", id="back_to_main_menu", variant="default")
-        yield Label("", id="search_users_message_label", classes="message")
-        yield Static("", id="search_results_display", classes="results")
+        with VerticalScroll():
+            yield Label("--- Search Users ---", classes="title")
+            yield Label("Search Query (username or full name):")
+            yield Input(placeholder="Enter search query", id="search_query")
+            yield Button("Search", id="submit_search_users", variant="primary")
+            yield Button("Back", id="back_to_main_menu", variant="default")
+            yield Label("", id="search_users_message_label", classes="message")
+            yield Static("", id="search_results_display", classes="results")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "submit_search_users":
@@ -815,18 +893,19 @@ class SearchUsersScreen(VerticalScroll):
         elif event.button.id == "back_to_main_menu":
             self.app_instance.pop_screen()
 
-class MoneyRequestsScreen(VerticalScroll):
+class MoneyRequestsScreen(Screen):
     def __init__(self, app_instance, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        yield Label("--- Money Request Operations ---", classes="title")
-        yield Button("Send Money Request", id="send_money_request_button", variant="primary")
-        yield Button("View Pending Requests", id="view_pending_requests_button", variant="primary")
-        yield Button("Respond to Request", id="respond_to_request_button", variant="primary")
-        yield Button("Back", id="back_to_main_menu", variant="default")
-        yield Label("", id="money_requests_message_label", classes="message")
+        with VerticalScroll():
+            yield Label("--- Money Request Operations ---", classes="title")
+            yield Button("Send Money Request", id="send_money_request_button", variant="primary")
+            yield Button("View Pending Requests", id="view_pending_requests_button", variant="primary")
+            yield Button("Respond to Request", id="respond_to_request_button", variant="primary")
+            yield Button("Back", id="back_to_main_menu", variant="default")
+            yield Label("", id="money_requests_message_label", classes="message")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "send_money_request_button":
@@ -839,20 +918,21 @@ class MoneyRequestsScreen(VerticalScroll):
         elif event.button.id == "back_to_main_menu":
             self.app_instance.pop_screen()
 
-class SendMoneyRequestScreen(VerticalScroll):
+class SendMoneyRequestScreen(Screen):
     def __init__(self, app_instance, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        yield Label("--- Send Money Request ---", classes="title")
-        yield Label("Recipient Username:")
-        yield Input(placeholder="Enter recipient's username", id="to_username")
-        yield Label("Amount:")
-        yield Input(placeholder="Enter amount to request", id="request_amount", type="number")
-        yield Button("Send Request", id="submit_money_request", variant="primary")
-        yield Button("Back", id="back_to_money_requests", variant="default")
-        yield Label("", id="send_request_message_label", classes="message")
+        with VerticalScroll():
+            yield Label("--- Send Money Request ---", classes="title")
+            yield Label("Recipient Username:")
+            yield Input(placeholder="Enter recipient's username", id="to_username")
+            yield Label("Amount:")
+            yield Input(placeholder="Enter amount to request", id="request_amount", type="number")
+            yield Button("Send Request", id="submit_money_request", variant="primary")
+            yield Button("Back", id="back_to_money_requests", variant="default")
+            yield Label("", id="send_request_message_label", classes="message")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "submit_money_request":
@@ -868,20 +948,21 @@ class SendMoneyRequestScreen(VerticalScroll):
         elif event.button.id == "back_to_money_requests":
             self.app_instance.pop_screen()
 
-class RespondToMoneyRequestScreen(VerticalScroll):
+class RespondToMoneyRequestScreen(Screen):
     def __init__(self, app_instance, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        yield Label("--- Respond to Money Request ---", classes="title")
-        yield Label("Request ID:")
-        yield Input(placeholder="Enter Request ID", id="request_id", type="number")
-        yield Label("Action (accept/decline):")
-        yield Input(placeholder="Type 'accept' or 'decline'", id="request_action")
-        yield Button("Submit Response", id="submit_request_response", variant="primary")
-        yield Button("Back", id="back_to_money_requests", variant="default")
-        yield Label("", id="respond_request_message_label", classes="message")
+        with VerticalScroll():
+            yield Label("--- Respond to Money Request ---", classes="title")
+            yield Label("Request ID:")
+            yield Input(placeholder="Enter Request ID", id="request_id", type="number")
+            yield Label("Action (accept/decline):")
+            yield Input(placeholder="Type 'accept' or 'decline'", id="request_action")
+            yield Button("Submit Response", id="submit_request_response", variant="primary")
+            yield Button("Back", id="back_to_money_requests", variant="default")
+            yield Label("", id="respond_request_message_label", classes="message")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "submit_request_response":
@@ -897,7 +978,7 @@ class RespondToMoneyRequestScreen(VerticalScroll):
         elif event.button.id == "back_to_money_requests":
             self.app_instance.pop_screen()
 
-class InfoScreen(VerticalScroll):
+class InfoScreen(Screen):
     def __init__(self, app_instance, title, content, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.app_instance = app_instance
@@ -905,9 +986,10 @@ class InfoScreen(VerticalScroll):
         self.content = content
 
     def compose(self) -> ComposeResult:
-        yield Label(f"--- {self.title} ---", classes="title")
-        yield Static(self.content, classes="info_content")
-        yield Button("Back", id="back_from_info", variant="default")
+        with VerticalScroll():
+            yield Label(f"--- {self.title} ---", classes="title")
+            yield Static(self.content, classes="info_content")
+            yield Button("Back", id="back_from_info", variant="default")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back_from_info":
