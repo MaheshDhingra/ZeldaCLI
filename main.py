@@ -30,22 +30,21 @@ CONFIG_DIR = "users"
 if not os.path.exists(CONFIG_DIR):
     os.makedirs(CONFIG_DIR)
 
-# Global definitions for themes, ASCII arts, and user config functions
 THEMES = {
     "retro": {
-        "background": "#000080",  # Navy blue
-        "text": "#00FF00",  # Green
-        "border": "#FFFF00",  # Yellow
+        "background": "#000080",
+        "text": "#00FF00",
+        "border": "#FFFF00",
     },
     "modern": {
-        "background": "#1E1E1E",  # Dark grey
-        "text": "#FFFFFF",  # White
-        "border": "#007ACC",  # Blue
+        "background": "#1E1E1E",
+        "text": "#FFFFFF",
+        "border": "#007ACC",
     },
     "matrix": {
-        "background": "#000000",  # Black
-        "text": "#00FF41",  # Matrix green
-        "border": "#00FF41",  # Matrix green
+        "background": "#000000",
+        "text": "#00FF41",
+        "border": "#00FF41",
     },
 }
 
@@ -105,7 +104,6 @@ def notify(app_instance, message, style="info"):
     app_instance.update_taskbar()
     app_instance.refresh()
 
-# Login Screen
 class LoginScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Container(
@@ -125,7 +123,6 @@ class LoginScreen(Screen):
             else:
                 self.query_one("#login_title", Static).update("Login Failed: Enter username and password")
 
-# Settings Widget (for desktop widgets)
 class SettingsWidget(Static):
     def compose(self) -> ComposeResult:
         yield Label("[b][#ffd700]Settings[/]")
@@ -143,7 +140,6 @@ class SettingsWidget(Static):
         elif event.button.id == "manage_favorites":
             self.app.add_widget(FavoritesManager(), "Favorites Manager")
 
-# Theme Widget
 class ThemeWidget(Static):
     def compose(self) -> ComposeResult:
         yield Label("[b][#ffd700]Theme Switcher[/]")
@@ -153,7 +149,6 @@ class ThemeWidget(Static):
         theme_name = event.button.id.replace("theme_", "")
         self.app.set_theme(theme_name)
 
-# ASCII Art Selector
 class AsciiArtSelector(Static):
     def compose(self) -> ComposeResult:
         yield Label("[b][#ffd700]ASCII Art Selector[/]")
@@ -167,7 +162,6 @@ class AsciiArtSelector(Static):
         else:
             self.app.set_ascii_art(art_name)
 
-# Avatar Selector
 class AvatarSelector(Static):
     def compose(self) -> ComposeResult:
         yield Label("[b][#ffd700]Avatar Selector[/]")
@@ -178,7 +172,6 @@ class AvatarSelector(Static):
             avatar = self.query_one("#avatar_input", Input).value
             self.app.set_avatar(avatar)
 
-# Favorites Manager
 class FavoritesManager(Static):
     def compose(self) -> ComposeResult:
         yield Label("[b][#ffd700]Manage Favorites[/]")
@@ -190,11 +183,9 @@ class FavoritesManager(Static):
         self.app.toggle_favorite(widget_name)
         self.refresh()
 
-# Scrollable Container (for web browser and mail)
 class ScrollableContainer(Container):
     pass
 
-# --- Web Browser Screen ---
 class WebBrowserScreen(Screen):
     BINDINGS = [
         Binding("escape", "pop_screen", "Back"),
@@ -297,7 +288,6 @@ async def get_news():
 
 from textual.binding import Binding
 
-# --- Tic-Tac-Toe Game ---
 class TicTacToeBoard:
     def __init__(self):
         self.board = [' ' for _ in range(9)]
@@ -355,9 +345,6 @@ class ChessBoard:
         self.current_player = "White" # White starts
 
     def _initialize_board(self):
-        # A simplified board for display purposes
-        # R=Rook, N=Knight, B=Bishop, Q=Queen, K=King, P=Pawn
-        # Lowercase for black, uppercase for white
         return [
             ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'],
             ['p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'],
@@ -393,7 +380,6 @@ class ChessBoard:
         self.current_player = "Black" if self.current_player == "White" else "White"
 
 MAZES = [
-    # Maze 1 (Current one)
     [
         "#########",
         "#S      #",
@@ -405,7 +391,6 @@ MAZES = [
         "#     E #",
         "#########",
     ],
-    # Maze 2 (A slightly different one)
     [
         "###########",
         "#S #      #",
@@ -418,7 +403,6 @@ MAZES = [
         "#  #   # E#",
         "###########",
     ],
-    # Maze 3 (Another example)
     [
         "#############",
         "#S          #",
@@ -437,13 +421,13 @@ MAZES = [
 class MailService:
     def __init__(self, smtp_server, smtp_port, smtp_username, smtp_password, sender_email):
         self.smtp_server = smtp_server
-        self.smtp_port = int(smtp_port) # Ensure port is an integer
+        self.smtp_port = int(smtp_port)
         self.smtp_username = smtp_username
         self.smtp_password = smtp_password
         self.sender_email = sender_email
-        self.inbox = [] # Still simulated for receiving, as a full IMAP/POP3 client is out of scope
+        self.inbox = []
         self.sent_items = []
-        self.current_user = sender_email # Use the actual sender email as the current user
+        self.current_user = sender_email
 
     def send_message(self, recipient, subject, body):
         try:
@@ -454,7 +438,7 @@ class MailService:
             msg.attach(MIMEText(body, 'plain'))
 
             with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
-                server.starttls() # Secure the connection
+                server.starttls()
                 server.login(self.smtp_username, self.smtp_password)
                 server.send_message(msg)
 
@@ -501,7 +485,7 @@ class WeatherWidget(Static):
 
     def on_mount(self) -> None:
         self.update_weather()
-        self.set_interval(60 * 15, self.update_weather) # Update every 15 minutes
+        self.set_interval(60 * 15, self.update_weather)
 
     async def update_weather(self) -> None:
         self.weather_data = await get_weather()
@@ -514,7 +498,7 @@ class NewsWidget(Static):
 
     def on_mount(self) -> None:
         self.update_news()
-        self.set_interval(60 * 30, self.update_news) # Update every 30 minutes
+        self.set_interval(60 * 30, self.update_news)
 
     async def update_news(self) -> None:
         self.news_data = await get_news()
@@ -625,7 +609,7 @@ class ChessScreen(BaseScreen):
         self.chess_board = ChessBoard()
         self.move_input = ""
 
-    def compose(self) -> ComposeResult: # Changed from body to compose
+    def compose(self) -> ComposeResult:
         yield Static("Chess Game", id="chess_title")
         yield Static(self.chess_board.display(), id="chess_board_display")
         yield Static(self.chess_board.get_status(), id="chess_status")
@@ -642,10 +626,10 @@ class ChessScreen(BaseScreen):
             self.move_input = self.query_one("#move_input", Input).value
             if self.move_input:
                 result_message = self.chess_board.make_move(self.move_input)
-                self.chess_board.switch_player() # For simple turn-taking
+                self.chess_board.switch_player()
                 self.query_one("#chess_board_display", Static).update(self.chess_board.display())
                 self.query_one("#chess_status", Static).update(f"{self.chess_board.get_status()} {result_message}")
-                self.query_one("#move_input", Input).value = "" # Clear input
+                self.query_one("#move_input", Input).value = ""
             else:
                 self.query_one("#chess_status", Static).update("Please enter a move.")
 
@@ -668,9 +652,9 @@ class MazeGameScreen(BaseScreen):
             for c, char in enumerate(row):
                 if char == 'S':
                     return [r, c]
-        return [1, 1] # Default if 'S' not found
+        return [1, 1]
 
-    def compose(self) -> ComposeResult: # Changed from body to compose
+    def compose(self) -> ComposeResult:
         maze_display = "\n".join([
             "".join([
                 "P" if [r_idx, c_idx] == self.player_pos else char
@@ -744,10 +728,10 @@ class MailScreen(BaseScreen):
 
     def __init__(self):
         super().__init__()
-        self.current_view = "compose" # "compose", "inbox", "sent"
+        self.current_view = "compose"
         self.message = ""
 
-    def compose(self) -> ComposeResult: # Changed from body to compose
+    def compose(self) -> ComposeResult:
         yield Static("Mail Service", id="mail_title")
         yield Horizontal(
             Button("Compose", id="view_compose", classes="mail_nav_button"),
@@ -831,7 +815,7 @@ class MailScreen(BaseScreen):
         self.compose()
 
 class BackgroundSelectorScreen(BaseScreen):
-    def compose(self) -> ComposeResult: # Changed from body to compose
+    def compose(self) -> ComposeResult:
         yield Static("Select a background:")
         yield Button("Default Background", id="bg_default")
         yield Button("Blue Theme", id="bg_blue")
@@ -863,22 +847,65 @@ class FileBrowserScreen(BaseScreen):
         super().__init__()
         self.path = path or os.getcwd()
 
-    def compose(self) -> ComposeResult: # Changed from body to compose
+    def compose(self) -> ComposeResult:
         yield Static(f"Current Directory: {self.path}")
-        yield Button("..", id="parent_dir") # Button to go up one directory
-        yield Button("New File", id="new_file") # Button to create a new file
+        yield Button("..", id="parent_dir")
+        yield Button("New File", id="new_file")
+        files = os.listdir(self.path)
+        lv = ListView(*[ListItem(Label(f)) for f in files], id="filelist")
+        yield lv
+        yield Static("[dim]Select a file or folder.[/]", id="file_content_display")
 
-        # Placeholder for bar and app.set_timer, as they are not defined in this scope
-        # try:
-        #     app.screen.mount(bar)
-        # except Exception:
-        #     app.mount(bar)
-        # def remove_bar():
-        #     try:
-        #         bar.remove()
-        #     except Exception:
-        #         pass
-        # app.set_timer(2.5, remove_bar)
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "parent_dir":
+            self.path = os.path.dirname(self.path)
+            self.refresh()
+        elif event.button.id == "new_file":
+            self.app.push_screen(NewFileScreen(self.path))
+
+    def on_list_view_selected(self, event: ListView.Selected):
+        selected_item = event.item.query_one(Label).renderable.plain
+        selected_path = os.path.join(self.path, selected_item)
+        if os.path.isdir(selected_path):
+            self.path = selected_path
+            self.refresh()
+        else:
+            try:
+                with open(selected_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                self.query_one("#file_content_display", Static).update(Syntax(content, "python", theme="monokai", line_numbers=True))
+            except Exception as e:
+                self.query_one("#file_content_display", Static).update(f"[red]Error reading file: {e}[/]")
+
+class NewFileScreen(Screen):
+    def __init__(self, current_path):
+        super().__init__()
+        self.current_path = current_path
+
+    def compose(self) -> ComposeResult:
+        yield Static("Create New File", id="new_file_title")
+        yield Input(placeholder="Enter filename", id="new_file_name")
+        yield Input(placeholder="Enter content (optional)", id="new_file_content")
+        yield Button("Create", id="create_file_button")
+        yield Button("Cancel", id="cancel_button")
+
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "create_file_button":
+            file_name = self.query_one("#new_file_name", Input).value
+            file_content = self.query_one("#new_file_content", Input).value
+            if file_name:
+                file_path = os.path.join(self.current_path, file_name)
+                try:
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(file_content)
+                    self.app.notify(f"File '{file_name}' created successfully.", "success")
+                    self.app.pop_screen()
+                except Exception as e:
+                    self.app.notify(f"Error creating file: {e}", "error")
+            else:
+                self.app.notify("Filename cannot be empty.", "warning")
+        elif event.button.id == "cancel_button":
+            self.app.pop_screen()
 
 # --- Help/About Screen ---
 class HelpScreen(Screen):
@@ -1283,14 +1310,13 @@ class TaskbarMenu(Vertical):
 class Desktop(Container):
     ascii_art = reactive("")
     background = reactive(THEMES["retro"]["background"])
-    def render(self):
-        art = self.ascii_art
-        bg = self.background
-        return f"[on {bg}]{art}"
 
 # --- Dashboard Container ---
 class Dashboard(Desktop):
     def compose(self) -> ComposeResult:
+        # Add a Static widget for ASCII art if it exists
+        if self.app.ascii_art:
+            yield Static(self.app.ascii_art, id="ascii_art_display")
         for app in self.app.open_apps:
             yield app["widget"]
 
@@ -1320,7 +1346,7 @@ class AppLauncherMenu(Horizontal):
         for name, widget_cls, _ in self.apps:
             safe_id = f"launch_{name.replace(' ', '_').replace('/', '_')}" # Replaced / with _
             if event.button.id == safe_id:
-                self._app.open_or_focus_app(widget_cls, name)
+                self._app.open_app(widget_cls, name)
                 self.remove()
                 break
 
