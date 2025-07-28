@@ -4,19 +4,253 @@ from dotenv import load_dotenv
 from textual.app import App, ComposeResult
 from textual.widgets import Static, Button, Header, Footer, Input, Label, ListView, ListItem
 from textual.containers import Container, Horizontal, Vertical
-from textual.reactive import reactive
+from textual.reactive import reactive, var
 from textual import events
+import time
 from datetime import datetime, timedelta
 import psutil
 import subprocess
 import calendar
 from textual.screen import Screen
+import random
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import threading
+import platform
+import httpx # Added httpx for async HTTP requests
+import html # Added html for HTML escaping
+from rich.syntax import Syntax # For code display
+from rich.text import Text # For rich text display
+from textual.binding import Binding # Added Binding import
 
 load_dotenv()
 
 CONFIG_DIR = "users"
 if not os.path.exists(CONFIG_DIR):
     os.makedirs(CONFIG_DIR)
+
+# Global definitions for themes, ASCII arts, and user config functions
+THEMES = {
+    "retro": {
+        "background": "#000080",  # Navy blue
+        "text": "#00FF00",  # Green
+        "border": "#FFFF00",  # Yellow
+    },
+    "modern": {
+        "background": "#1E1E1E",  # Dark grey
+        "text": "#FFFFFF",  # White
+        "border": "#007ACC",  # Blue
+    },
+    "matrix": {
+        "background": "#000000",  # Black
+        "text": "#00FF41",  # Matrix green
+        "border": "#00FF41",  # Matrix green
+    },
+}
+
+ASCII_ARTS = {
+    "zelda": r"""
+  /\\
+ /  \\
+/____\\
+|    |
+|____|
+""",
+    "triforce": r"""
+  /\\
+ /__\\
+/__  __\\
+\  /  /
+ \/  /
+  \/
+""",
+}
+
+def get_user_config_path(username):
+    return os.path.join(CONFIG_DIR, f"{username}.json")
+
+def load_config(username):
+    config_path = get_user_config_path(username)
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_config(username, data):
+    config_path = get_user_config_path(username)
+    with open(config_path, "w") as f:
+        json.dump(data, f, indent=4)
+
+def load_notes(username):
+    config = load_config(username)
+    return config.get("notes", "")
+
+def save_notes(username, notes):
+    config = load_config(username)
+    config["notes"] = notes
+    save_config(username, config)
+
+def load_reminders(username):
+    config = load_config(username)
+    return config.get("reminders", [])
+
+def save_reminders(username, reminders):
+    config = load_config(username)
+    config["reminders"] = reminders
+    save_config(username, config)
+
+def notify(app_instance, message, style="info"):
+    app_instance.notifications.append({"message": message, "style": style})
+    app_instance.update_taskbar()
+    app_instance.refresh()
+
+# Login Screen
+class LoginScreen(Screen):
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Static("ZeldaCLI OS - Login", id="login_title"),
+            Input(placeholder="Username", id="username_input"),
+            Input(placeholder="Password (any)", password=True, id="password_input"),
+            Button("Login", id="login_button"),
+            id="login_container"
+        )
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "login_button":
+            username = self.query_one("#username_input", Input).value
+            # For simplicity, any non-empty username and password works
+            if username and self.query_one("#password_input", Input).value:
+                self.app.login(username)
+                self.app.pop_screen()
+            else:
+                self.query_one("#login_title", Static).update("Login Failed: Enter username and password")
+
+# Settings Widget (for desktop widgets)
+class SettingsWidget(Static):
+    def compose(self) -> ComposeResult:
+        yield Label("[b][#ffd700]Settings[/]")
+        yield Button("Change Theme", id="change_theme")
+        yield Button("Change ASCII Art", id="change_ascii")
+        yield Button("Set Avatar", id="set_avatar")
+        yield Button("Manage Favorites", id="manage_favorites")
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "change_theme":
+            self.app.add_widget(ThemeWidget(), "Theme Switcher")
+        elif event.button.id == "change_ascii":
+            self.app.add_widget(AsciiArtSelector(), "ASCII Art Selector")
+        elif event.button.id == "set_avatar":
+            self.app.add_widget(AvatarSelector(), "Avatar Selector")
+        elif event.button.id == "manage_favorites":
+            self.app.add_widget(FavoritesManager(), "Favorites Manager")
+
+# Theme Widget
+class ThemeWidget(Static):
+    def compose(self) -> ComposeResult:
+        yield Label("[b][#ffd700]Theme Switcher[/]")
+        for theme_name in THEMES.keys():
+            yield Button(theme_name.capitalize(), id=f"theme_{theme_name}")
+    def on_button_pressed(self, event: Button.Pressed):
+        theme_name = event.button.id.replace("theme_", "")
+        self.app.set_theme(theme_name)
+
+# ASCII Art Selector
+class AsciiArtSelector(Static):
+    def compose(self) -> ComposeResult:
+        yield Label("[b][#ffd700]ASCII Art Selector[/]")
+        yield Button("None", id="ascii_none")
+        for art_name in ASCII_ARTS.keys():
+            yield Button(art_name.capitalize(), id=f"ascii_{art_name}")
+    def on_button_pressed(self, event: Button.Pressed):
+        art_name = event.button.id.replace("ascii_", "")
+        if art_name == "none":
+            self.app.set_ascii_art("")
+        else:
+            self.app.set_ascii_art(art_name)
+
+# Avatar Selector
+class AvatarSelector(Static):
+    def compose(self) -> ComposeResult:
+        yield Label("[b][#ffd700]Avatar Selector[/]")
+        yield Input(placeholder="Enter avatar (e.g., :) )", id="avatar_input")
+        yield Button("Set Avatar", id="set_avatar_btn")
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "set_avatar_btn":
+            avatar = self.query_one("#avatar_input", Input).value
+            self.app.set_avatar(avatar)
+
+# Favorites Manager
+class FavoritesManager(Static):
+    def compose(self) -> ComposeResult:
+        yield Label("[b][#ffd700]Manage Favorites[/]")
+        for widget_name in ["Clock", "SysMon", "Notes", "File Explorer", "Calculator", "Terminal", "Reminders", "Calendar"]:
+            is_fav = widget_name in self.app.favorites
+            yield Button(f"{widget_name} {'(★)' if is_fav else '(☆)'}", id=f"toggle_fav_{widget_name}")
+    def on_button_pressed(self, event: Button.Pressed):
+        widget_name = event.button.id.replace("toggle_fav_", "")
+        self.app.toggle_favorite(widget_name)
+        self.refresh()
+
+# Scrollable Container (for web browser and mail)
+class ScrollableContainer(Container):
+    pass
+
+# --- Web Browser Screen ---
+class WebBrowserScreen(Screen):
+    BINDINGS = [
+        Binding("escape", "pop_screen", "Back"),
+    ]
+    url = reactive("https://textual.textualize.io/")
+    content = reactive("Loading...")
+    status_message = reactive("")
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static("Web Browser", id="browser_title")
+        yield Input(placeholder="Enter URL (e.g., https://example.com)", id="url_input", value=self.url)
+        yield Button("Go", id="go_button")
+        yield ScrollableContainer(Static(self.content, id="browser_content"))
+        yield Static(self.status_message, id="browser_status")
+        yield Button("Back", id="back_browser")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.fetch_url()
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "back_browser":
+            self.app.pop_screen()
+        elif event.button.id == "go_button":
+            self.url = self.query_one("#url_input", Input).value
+            self.fetch_url()
+
+    async def fetch_url(self) -> None:
+        self.content = "Loading..."
+        self.status_message = f"Fetching {self.url}..."
+        self.query_one("#browser_content", Static).update(self.content)
+        self.query_one("#browser_status", Static).update(self.status_message)
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(self.url, follow_redirects=True, timeout=10)
+                response.raise_for_status()
+                # Basic HTML to text conversion (very simplified)
+                # For a real browser, you'd need a more robust HTML parser
+                text_content = html.unescape(response.text)
+                # Limit content to avoid excessive memory usage
+                self.content = text_content[:5000] + ("..." if len(text_content) > 5000 else "")
+                self.status_message = f"Loaded {self.url}"
+        except httpx.RequestError as e:
+            self.content = f"Error: Could not connect to {self.url}. {e}"
+            self.status_message = "Connection Error"
+        except httpx.HTTPStatusError as e:
+            self.content = f"Error: HTTP {e.response.status_code} for {self.url}"
+            self.status_message = f"HTTP Error: {e.response.status_code}"
+        except Exception as e:
+            self.content = f"An unexpected error occurred: {e}"
+            self.status_message = "Unknown Error"
+        finally:
+            self.query_one("#browser_content", Static).update(self.content)
+            self.query_one("#browser_status", Static).update(self.status_message)
 
 async def get_weather():
     api_key = os.getenv("OPENWEATHERMAP_API_KEY")
@@ -61,8 +295,59 @@ async def get_news():
     except Exception as e:
         return f"News Error: {e}"
 
-from textual.reactive import var
 from textual.binding import Binding
+
+# --- Tic-Tac-Toe Game ---
+class TicTacToeBoard:
+    def __init__(self):
+        self.board = [' ' for _ in range(9)]
+        self.current_player = 'X'
+        self.game_over = False
+        self.winner = None
+
+    def display(self):
+        return (
+            f" {self.board[0]} | {self.board[1]} | {self.board[2]} \n"
+            "---+---+---\n"
+            f" {self.board[3]} | {self.board[4]} | {self.board[5]} \n"
+            "---+---+---\n"
+            f" {self.board[6]} | {self.board[7]} | {self.board[8]} "
+        )
+
+    def make_move(self, position):
+        if self.game_over:
+            return "Game is over. Start a new game."
+        try:
+            pos = int(position) - 1
+            if 0 <= pos < 9 and self.board[pos] == ' ':
+                self.board[pos] = self.current_player
+                self.check_game_status()
+                if not self.game_over:
+                    self.switch_player()
+                return "Move successful."
+            else:
+                return "Invalid move. Position taken or out of bounds."
+        except ValueError:
+            return "Invalid input. Please enter a number 1-9."
+
+    def switch_player(self):
+        self.current_player = 'O' if self.current_player == 'X' else 'X'
+
+    def check_game_status(self):
+        winning_combinations = [
+            (0, 1, 2), (3, 4, 5), (6, 7, 8),  # Rows
+            (0, 3, 6), (1, 4, 7), (2, 5, 8),  # Columns
+            (0, 4, 8), (2, 4, 6)              # Diagonals
+        ]
+        for combo in winning_combinations:
+            if (self.board[combo[0]] == self.board[combo[1]] == self.board[combo[2]]) and self.board[combo[0]] != ' ':
+                self.winner = self.board[combo[0]]
+                self.game_over = True
+                return
+
+        if ' ' not in self.board:
+            self.game_over = True
+            self.winner = "Draw"
 
 class ChessBoard:
     def __init__(self):
@@ -237,6 +522,34 @@ class NewsWidget(Static):
     def render(self) -> str:
         return self.news_data
 
+class CalculatorScreen(Screen):
+    BINDINGS = [
+        Binding("escape", "pop_screen", "Back"),
+    ]
+    expr = reactive("")
+    result = reactive("")
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static("Calculator", id="calc_title")
+        yield Input(placeholder="Enter expression and press Enter...", id="calc_input")
+        yield Static(self.result, id="calc_result")
+        yield Button("Calculate", id="calculate_button")
+        yield Button("Back", id="back_calc")
+        yield Footer()
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "back_calc":
+            self.app.pop_screen()
+        elif event.button.id == "calculate_button":
+            self.expr = self.query_one("#calc_input", Input).value
+            try:
+                self.result = str(eval(self.expr, {}, {}))
+            except Exception as e:
+                self.result = f"Error: {e}"
+            self.query_one("#calc_result", Static).update(self.result)
+            self.query_one("#calc_input", Input).value = ""
+
 class CalculatorWidget(Static):
     def render(self) -> str:
         return "Calculator Widget (Click to open app)"
@@ -245,157 +558,62 @@ class MazeWidget(Static):
     def render(self) -> str:
         return "Maze Widget (Click to open app)"
 
+class TicTacToeWidget(Static):
+    def render(self) -> str:
+        return "Tic-Tac-Toe Widget (Click to open app)"
+
 class BaseScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Footer()
-        yield from self.body() # Placeholder for screen-specific content
-
-    def body(self) -> ComposeResult:
-        # This method should be overridden by subclasses
         yield Static("Default Body Content")
 
-class ZeldaTUIOS(App):
-    CSS_PATH = "zelda.css"
-    TITLE = "Zelda TUI OS"
-    SUB_TITLE = "A Textual-based OS in your terminal"
-
-    # Global state for widgets
-    enabled_widgets = {
-        "clock": True,
-        "weather": True,
-        "news": True,
-        "calculator": False,
-        "maze": False,
-    }
-
-    def __init__(self): # Removed mail_service parameter
-        super().__init__()
-        # Initialize MailService using environment variables
-        smtp_server = os.getenv("SMTP_SERVER")
-        smtp_port = os.getenv("SMTP_PORT")
-        smtp_username = os.getenv("SMTP_USERNAME")
-        smtp_password = os.getenv("SMTP_PASSWORD")
-        sender_email = os.getenv("SENDER_EMAIL")
-
-        if all([smtp_server, smtp_port, smtp_username, smtp_password, sender_email]):
-            self.mail_service = MailService(
-                smtp_server, smtp_port, smtp_username, smtp_password, sender_email
-            )
-        else:
-            self.mail_service = None
-            self.log("MailService not fully configured in .env. Mail functionality may be limited.")
-
-    def compose(self) -> ComposeResult:
-        # The app will start with the DashboardScreen
-        yield DashboardScreen()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.app.log(f"Button pressed: {event.button.id}") # Add logging
-        button_id = event.button.id
-        if button_id == "file_browser":
-            self.push_screen(FileBrowserScreen())
-        elif button_id == "calculator":
-            self.push_screen(CalculatorScreen())
-        elif button_id == "system_info":
-            self.push_screen(SystemInfoScreen())
-        elif button_id == "maze_game":
-            self.push_screen(MazeGameScreen())
-        elif button_id == "nano_editor":
-            self.push_screen(NanoEditorScreen())
-        elif button_id == "web_browser":
-            self.push_screen(WebBrowserScreen())
-        elif button_id == "pomodoro_timer":
-            self.push_screen(PomodoroTimerScreen())
-        elif button_id == "backgrounds":
-            self.push_screen(BackgroundSelectorScreen())
-        elif button_id == "chess_game":
-            self.push_screen(ChessScreen())
-        elif button_id == "mail_service":
-            self.push_screen(MailScreen())
-        elif button_id == "music_player_app":
-            self.push_screen(MusicPlayerScreen())
-        elif button_id == "clock_app":
-            self.push_screen(ClockAppScreen())
-        elif button_id == "settings_app":
-            self.push_screen(SettingsScreen())
-        elif button_id == "exit":
-            self.exit()
-
-# Rename MainMenu to DashboardScreen
-class DashboardScreen(BaseScreen): # Renamed from MainMenu
-    BINDINGS = [
-        Binding("enter", "press_focused_button", "Select"),
-        Binding("space", "press_focused_button", "Select"),
-    ]
-
-    async def on_mount(self) -> None:
-        pass # No specific mount logic for dashboard itself, widgets handle their own updates
-
-    def body(self) -> ComposeResult:
-        yield Static("Zelda TUI OS - Dashboard", id="dashboard_test_message", classes="dashboard_message")
-        yield Horizontal(
-            Vertical(
-                ClockWidget(id="dashboard_clock_widget") if self.app.enabled_widgets["clock"] else Static(""),
-                WeatherWidget(id="dashboard_weather_widget") if self.app.enabled_widgets["weather"] else Static(""),
-                NewsWidget(id="dashboard_news_widget") if self.app.enabled_widgets["news"] else Static(""),
-                CalculatorWidget(id="dashboard_calculator_widget") if self.app.enabled_widgets["calculator"] else Static(""),
-                MazeWidget(id="dashboard_maze_widget") if self.app.enabled_widgets["maze"] else Static(""),
-                id="dashboard_widgets"
-            ),
-            Vertical(
-                Button("File Browser", id="file_browser"),
-                Button("Calculator", id="calculator"),
-                Button("System Info", id="system_info"),
-                Button("Maze Game", id="maze_game"),
-                Button("Nano Editor", id="nano_editor"),
-                Button("Web Browser", id="web_browser"),
-                Button("Pomodoro Timer", id="pomodoro_timer"),
-                Button("Backgrounds", id="backgrounds"),
-                Button("Chess Game", id="chess_game"),
-                Button("Mail Service", id="mail_service"),
-                Button("Music Player", id="music_player_app"),
-                Button("Clock App", id="clock_app"),
-                Button("Settings", id="settings_app"),
-                Button("Exit", id="exit"),
-                id="main_menu_buttons"
-            ),
-            id="dashboard_container"
-        )
-
-    def action_press_focused_button(self) -> None:
-        focused_widget = self.app.focused
-        if isinstance(focused_widget, Button):
-            focused_widget.press()
-
-class SettingsScreen(Screen):
+class TicTacToeScreen(BaseScreen):
     BINDINGS = [
         Binding("escape", "pop_screen", "Back"),
     ]
 
+    def __init__(self):
+        super().__init__()
+        self.game = TicTacToeBoard()
+        self.message = "Enter position (1-9) to make a move."
+
     def compose(self) -> ComposeResult:
-        yield Static("Settings", id="settings_title")
-        yield Static("Toggle Widgets:")
-        for widget_name, is_enabled in self.app.enabled_widgets.items():
-            yield Button(f"{widget_name.capitalize()} {'(ON)' if is_enabled else '(OFF)'}", id=f"toggle_widget_{widget_name}")
-        yield Button("Back", id="back_settings")
+        yield Static("Tic-Tac-Toe", id="tictactoe_title")
+        yield Static(self.game.display(), id="tictactoe_board_display")
+        yield Static(self.message, id="tictactoe_message")
+        yield Input(placeholder="Enter position (1-9)", id="tictactoe_input")
+        yield Horizontal(
+            Button("Make Move", id="make_tictactoe_move"),
+            Button("New Game", id="new_tictactoe_game"),
+            Button("Back", id="back_tictactoe")
+        )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back_settings":
+        if event.button.id == "back_tictactoe":
             self.app.pop_screen()
-        elif event.button.id.startswith("toggle_widget_"):
-            widget_name = event.button.id[len("toggle_widget_"):]
-            self.app.enabled_widgets[widget_name] = not self.app.enabled_widgets[widget_name]
-            self.refresh_compose()
-            # Find the DashboardScreen and refresh it
-            # Refresh the dashboard screen to reflect widget changes
-            self.app.pop_screen() # Pop current settings screen
-            self.app.push_screen(DashboardScreen()) # Push a new dashboard screen to re-compose
+        elif event.button.id == "new_tictactoe_game":
+            self.game = TicTacToeBoard()
+            self.message = "New game started! X to move."
+            self.update_display()
+        elif event.button.id == "make_tictactoe_move":
+            position = self.query_one("#tictactoe_input", Input).value
+            if position:
+                result = self.game.make_move(position)
+                self.message = result
+                if self.game.game_over:
+                    if self.game.winner == "Draw":
+                        self.message = "Game Over: It's a Draw!"
+                    elif self.game.winner:
+                        self.message = f"Game Over: Player {self.game.winner} wins!"
+                self.update_display()
+                self.query_one("#tictactoe_input", Input).value = ""
+            else:
+                self.message = "Please enter a position."
+                self.query_one("#tictactoe_message", Static).update(self.message)
 
-    def refresh_compose(self):
-        # Clear existing content and recompose
-        for widget in self.query("Button, Static"): # Clear all buttons and statics
-            widget.remove()
-        self.compose() # Re-run compose to update content based on current_view
+    def update_display(self):
+        self.query_one("#tictactoe_board_display", Static).update(self.game.display())
+        self.query_one("#tictactoe_message", Static).update(self.message)
 
 class ChessScreen(BaseScreen):
     BINDINGS = [
@@ -407,7 +625,7 @@ class ChessScreen(BaseScreen):
         self.chess_board = ChessBoard()
         self.move_input = ""
 
-    def body(self) -> ComposeResult:
+    def compose(self) -> ComposeResult: # Changed from body to compose
         yield Static("Chess Game", id="chess_title")
         yield Static(self.chess_board.display(), id="chess_board_display")
         yield Static(self.chess_board.get_status(), id="chess_status")
@@ -452,7 +670,7 @@ class MazeGameScreen(BaseScreen):
                     return [r, c]
         return [1, 1] # Default if 'S' not found
 
-    def body(self) -> ComposeResult:
+    def compose(self) -> ComposeResult: # Changed from body to compose
         maze_display = "\n".join([
             "".join([
                 "P" if [r_idx, c_idx] == self.player_pos else char
@@ -529,7 +747,7 @@ class MailScreen(BaseScreen):
         self.current_view = "compose" # "compose", "inbox", "sent"
         self.message = ""
 
-    def body(self) -> ComposeResult:
+    def compose(self) -> ComposeResult: # Changed from body to compose
         yield Static("Mail Service", id="mail_title")
         yield Horizontal(
             Button("Compose", id="view_compose", classes="mail_nav_button"),
@@ -545,20 +763,26 @@ class MailScreen(BaseScreen):
             yield Button("Send Email", id="send_email")
         elif self.current_view == "inbox":
             if self.app.mail_service and self.app.mail_service.get_inbox():
-                inbox_content = "\n".join([
-                    f"From: {msg['from']}, Subject: {msg['subject']}, Time: {msg['timestamp']}\nBody: {msg['body']}"
-                    for msg in self.app.mail_service.get_inbox()
-                ])
+                inbox_content = Text()
+                for i, msg in enumerate(self.app.mail_service.get_inbox()):
+                    inbox_content.append(f"--- Message {i+1} ---\n", style="bold green")
+                    inbox_content.append(f"From: {msg['from']}\n", style="blue")
+                    inbox_content.append(f"Subject: {msg['subject']}\n", style="yellow")
+                    inbox_content.append(f"Time: {msg['timestamp']}\n", style="dim")
+                    inbox_content.append(f"Body:\n{msg['body']}\n\n", style="white")
                 yield ScrollableContainer(Static(inbox_content, id="inbox_display"))
             else:
                 yield Static("Inbox is empty or Mail Service not configured.")
             yield Button("Clear Inbox", id="clear_inbox")
         elif self.current_view == "sent":
             if self.app.mail_service and self.app.mail_service.get_sent_items():
-                sent_content = "\n".join([
-                    f"To: {msg['to']}, Subject: {msg['subject']}, Time: {msg['timestamp']}\nBody: {msg['body']}"
-                    for msg in self.app.mail_service.get_sent_items()
-                ])
+                sent_content = Text()
+                for i, msg in enumerate(self.app.mail_service.get_sent_items()):
+                    sent_content.append(f"--- Sent Message {i+1} ---\n", style="bold green")
+                    sent_content.append(f"To: {msg['to']}\n", style="blue")
+                    sent_content.append(f"Subject: {msg['subject']}\n", style="yellow")
+                    sent_content.append(f"Time: {msg['timestamp']}\n", style="dim")
+                    sent_content.append(f"Body:\n{msg['body']}\n\n", style="white")
                 yield ScrollableContainer(Static(sent_content, id="sent_display"))
             else:
                 yield Static("Sent items is empty or Mail Service not configured.")
@@ -606,382 +830,8 @@ class MailScreen(BaseScreen):
             widget.remove()
         self.compose()
 
-class MusicPlayerScreen(BaseScreen):
-    BINDINGS = [
-        Binding("escape", "pop_screen", "Back"),
-    ]
-
-    def __init__(self):
-        super().__init__()
-        self.is_playing = False
-        self.current_song = "No song loaded"
-        self.playlist = ["Song A - Artist 1", "Song B - Artist 2", "Song C - Artist 3"]
-        self.current_song_index = 0
-
-    def body(self) -> ComposeResult:
-        yield Static("Music Player (Simulated)", id="music_title")
-        yield Static(f"Now Playing: {self.current_song}", id="current_song_display")
-        yield Horizontal(
-            Button("Play", id="play_music"),
-            Button("Pause", id="pause_music"),
-            Button("Stop", id="stop_music"),
-            Button("Next", id="next_song"),
-            Button("Previous", id="prev_song"),
-        )
-        yield Static("Playlist:", id="playlist_header")
-        yield ScrollableContainer(Static("\n".join(self.playlist), id="playlist_display"))
-        yield Button("Back", id="back_music")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back_music":
-            self.app.pop_screen()
-        elif event.button.id == "play_music":
-            if not self.is_playing:
-                self.is_playing = True
-                self.current_song = self.playlist[self.current_song_index]
-                self.query_one("#current_song_display", Static).update(f"Now Playing: {self.current_song} (Playing)")
-        elif event.button.id == "pause_music":
-            if self.is_playing:
-                self.is_playing = False
-                self.query_one("#current_song_display", Static).update(f"Now Playing: {self.current_song} (Paused)")
-        elif event.button.id == "stop_music":
-            self.is_playing = False
-            self.current_song = "No song loaded"
-            self.query_one("#current_song_display", Static).update(f"Now Playing: {self.current_song}")
-        elif event.button.id == "next_song":
-            self.current_song_index = (self.current_song_index + 1) % len(self.playlist)
-            self.current_song = self.playlist[self.current_song_index]
-            self.query_one("#current_song_display", Static).update(f"Now Playing: {self.current_song} {'(Playing)' if self.is_playing else ''}")
-        elif event.button.id == "prev_song":
-            self.current_song_index = (self.current_song_index - 1 + len(self.playlist)) % len(self.playlist)
-            self.current_song = self.playlist[self.current_song_index]
-            self.query_one("#current_song_display", Static).update(f"Now Playing: {self.current_song} {'(Playing)' if self.is_playing else ''}")
-
-class ClockAppScreen(BaseScreen): # Renamed from ClockScreen to avoid confusion with ClockWidget
-    BINDINGS = [
-        Binding("escape", "pop_screen", "Back"),
-    ]
-
-    live_time = var(time.strftime("%H:%M:%S %A %d %b %Y"))
-
-    def on_mount(self) -> None:
-        self.set_interval(1, self.update_live_time)
-
-    def update_live_time(self) -> None:
-        self.live_time = time.strftime("%H:%M:%S %A %d %b %Y")
-
-    def watch_live_time(self, live_time: str) -> None:
-        self.query_one("#full_clock_display", Static).update(live_time)
-
-    def body(self) -> ComposeResult:
-        yield Static("Clock App", id="clock_app_title")
-        yield Static(self.live_time, id="full_clock_display")
-        yield Button("Back", id="back_clock_app")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back_clock_app":
-            self.app.pop_screen()
-
-class NanoEditorScreen(BaseScreen):
-    BINDINGS = [
-        Binding("escape", "pop_screen", "Back"),
-    ]
-
-    def __init__(self, path=None):
-        super().__init__()
-        self.path = path
-        self.content = ""
-        if self.path and os.path.exists(self.path):
-            with open(self.path, "r") as f:
-                self.content = f.read()
-
-    def body(self) -> ComposeResult:
-        yield Static(f"Editing: {self.path or 'New File'}", id="editor_status")
-        yield Input(value=self.content, placeholder="Start typing...", id="editor_input", classes="editor")
-        if not self.path:
-            yield Input(placeholder="Enter file path to save as...", id="save_path_input")
-        yield Horizontal(
-            Button("Save", id="save_file"),
-            Button("Back", id="back")
-        )
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.app.pop_screen()
-        elif event.button.id == "save_file":
-            new_content = self.query_one("#editor_input", Input).value
-            save_path = self.path
-            if not save_path:
-                save_path = self.query_one("#save_path_input", Input).value
-
-            if save_path:
-                try:
-                    # Ensure directory exists
-                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                    with open(save_path, "w") as f:
-                        f.write(new_content)
-                    self.query_one("#editor_status", Static).update(f"Saved: {save_path}")
-                    self.path = save_path # Update path if it was a new file
-                except Exception as e:
-                    self.query_one("#editor_status", Static).update(f"Error saving file: {e}")
-            else:
-                self.query_one("#editor_status", Static).update("Please specify a file path to save.")
-
-class WebBrowserScreen(BaseScreen):
-    BINDINGS = [
-        Binding("escape", "pop_screen", "Back"),
-    ]
-
-    def __init__(self):
-        super().__init__()
-        self.url = ""
-
-    def body(self) -> ComposeResult:
-        yield Static("TUI Web Browser (Limited Functionality)", id="browser_status")
-        yield Input(placeholder="Enter URL (e.g., example.com)", id="url_input")
-        yield Button("Go", id="go_button")
-        yield ScrollableContainer(Static("", id="browser_content"))
-        yield Button("Back", id="back")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.app.pop_screen()
-        elif event.button.id == "go_button":
-            self.url = self.query_one("#url_input", Input).value
-            if self.url:
-                display_url = self.url
-                if not display_url.startswith("http://") and not display_url.startswith("https://"):
-                    display_url = "http://" + display_url
-                try:
-                    self.query_one("#browser_status", Static).update(f"Fetching: {display_url}")
-                    response = requests.get(display_url, timeout=5) # Add a timeout
-                    self.query_one("#browser_content", Static).update(response.text)
-                    self.query_one("#browser_status", Static).update(f"Displaying: {display_url}")
-                except requests.exceptions.RequestException as e:
-                    self.query_one("#browser_content", Static).update(f"Error fetching URL: {e}")
-                    self.query_one("#browser_status", Static).update("Error fetching URL.")
-                except Exception as e:
-                    self.query_one("#browser_content", Static).update(f"An unexpected error occurred: {e}")
-                    self.query_one("#browser_status", Static).update("An unexpected error occurred.")
-            else:
-                self.query_one("#browser_content", Static).update("Please enter a URL.")
-                self.query_one("#browser_status", Static).update("TUI Web Browser (Limited Functionality)")
-
-class MusicPlayerScreen(BaseScreen):
-    BINDINGS = [
-        Binding("escape", "pop_screen", "Back"),
-    ]
-
-    def __init__(self):
-        super().__init__()
-        self.is_playing = False
-        self.current_song = "No song loaded"
-        self.playlist = ["Song A - Artist 1", "Song B - Artist 2", "Song C - Artist 3"]
-        self.current_song_index = 0
-
-    def body(self) -> ComposeResult:
-        yield Static("Music Player (Simulated)", id="music_title")
-        yield Static(f"Now Playing: {self.current_song}", id="current_song_display")
-        yield Horizontal(
-            Button("Play", id="play_music"),
-            Button("Pause", id="pause_music"),
-            Button("Stop", id="stop_music"),
-            Button("Next", id="next_song"),
-            Button("Previous", id="prev_song"),
-        )
-        yield Static("Playlist:", id="playlist_header")
-        yield ScrollableContainer(Static("\n".join(self.playlist), id="playlist_display"))
-        yield Button("Back", id="back_music")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back_music":
-            self.app.pop_screen()
-        elif event.button.id == "play_music":
-            if not self.is_playing:
-                self.is_playing = True
-                self.current_song = self.playlist[self.current_song_index]
-                self.query_one("#current_song_display", Static).update(f"Now Playing: {self.current_song} (Playing)")
-        elif event.button.id == "pause_music":
-            if self.is_playing:
-                self.is_playing = False
-                self.query_one("#current_song_display", Static).update(f"Now Playing: {self.current_song} (Paused)")
-        elif event.button.id == "stop_music":
-            self.is_playing = False
-            self.current_song = "No song loaded"
-            self.query_one("#current_song_display", Static).update(f"Now Playing: {self.current_song}")
-        elif event.button.id == "next_song":
-            self.current_song_index = (self.current_song_index + 1) % len(self.playlist)
-            self.current_song = self.playlist[self.current_song_index]
-            self.query_one("#current_song_display", Static).update(f"Now Playing: {self.current_song} {'(Playing)' if self.is_playing else ''}")
-        elif event.button.id == "prev_song":
-            self.current_song_index = (self.current_song_index - 1 + len(self.playlist)) % len(self.playlist)
-            self.current_song = self.playlist[self.current_song_index]
-            self.query_one("#current_song_display", Static).update(f"Now Playing: {self.current_song} {'(Playing)' if self.is_playing else ''}")
-
-class ClockAppScreen(BaseScreen): # Renamed from ClockScreen to avoid confusion with ClockWidget
-    BINDINGS = [
-        Binding("escape", "pop_screen", "Back"),
-    ]
-
-    live_time = var(time.strftime("%H:%M:%S %A %d %b %Y"))
-
-    def on_mount(self) -> None:
-        self.set_interval(1, self.update_live_time)
-
-    def update_live_time(self) -> None:
-        self.live_time = time.strftime("%H:%M:%S %A %d %b %Y")
-
-    def watch_live_time(self, live_time: str) -> None:
-        self.query_one("#full_clock_display", Static).update(live_time)
-
-    def body(self) -> ComposeResult:
-        yield Static("Clock App", id="clock_app_title")
-        yield Static(self.live_time, id="full_clock_display")
-        yield Button("Back", id="back_clock_app")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back_clock_app":
-            self.app.pop_screen()
-
-class NanoEditorScreen(BaseScreen):
-    BINDINGS = [
-        Binding("escape", "pop_screen", "Back"),
-    ]
-
-    def __init__(self, path=None):
-        super().__init__()
-        self.path = path
-        self.content = ""
-        if self.path and os.path.exists(self.path):
-            with open(self.path, "r") as f:
-                self.content = f.read()
-
-    def body(self) -> ComposeResult:
-        yield Static(f"Editing: {self.path or 'New File'}", id="editor_status")
-        yield Input(value=self.content, placeholder="Start typing...", id="editor_input", classes="editor")
-        if not self.path:
-            yield Input(placeholder="Enter file path to save as...", id="save_path_input")
-        yield Horizontal(
-            Button("Save", id="save_file"),
-            Button("Back", id="back")
-        )
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.app.pop_screen()
-        elif event.button.id == "save_file":
-            new_content = self.query_one("#editor_input", Input).value
-            save_path = self.path
-            if not save_path:
-                save_path = self.query_one("#save_path_input", Input).value
-
-            if save_path:
-                try:
-                    # Ensure directory exists
-                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                    with open(save_path, "w") as f:
-                        f.write(new_content)
-                    self.query_one("#editor_status", Static).update(f"Saved: {save_path}")
-                    self.path = save_path # Update path if it was a new file
-                except Exception as e:
-                    self.query_one("#editor_status", Static).update(f"Error saving file: {e}")
-            else:
-                self.query_one("#editor_status", Static).update("Please specify a file path to save.")
-
-class WebBrowserScreen(BaseScreen):
-    BINDINGS = [
-        Binding("escape", "pop_screen", "Back"),
-    ]
-
-    def __init__(self):
-        super().__init__()
-        self.url = ""
-
-    def body(self) -> ComposeResult:
-        yield Static("TUI Web Browser (Limited Functionality)", id="browser_status")
-        yield Input(placeholder="Enter URL (e.g., example.com)", id="url_input")
-        yield Button("Go", id="go_button")
-        yield ScrollableContainer(Static("", id="browser_content"))
-        yield Button("Back", id="back")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.app.pop_screen()
-        elif event.button.id == "go_button":
-            self.url = self.query_one("#url_input", Input).value
-            if self.url:
-                display_url = self.url
-                if not display_url.startswith("http://") and not display_url.startswith("https://"):
-                    display_url = "http://" + display_url
-                try:
-                    self.query_one("#browser_status", Static).update(f"Fetching: {display_url}")
-                    response = requests.get(display_url, timeout=5) # Add a timeout
-                    
-                    # Convert HTML to Markdown for better TUI display
-                    h = html2text.HTML2Text()
-                    h.ignore_links = False
-                    h.ignore_images = True
-                    markdown_content = h.handle(response.text)
-                    
-                    self.query_one("#browser_content", Static).update(markdown_content)
-                    self.query_one("#browser_status", Static).update(f"Displaying: {display_url}")
-                except requests.exceptions.RequestException as e:
-                    self.query_one("#browser_content", Static).update(f"Error fetching URL: {e}\n\nNote: A full TUI web browser is a complex feature requiring a dedicated rendering engine. This is a placeholder. Ensure 'html2text' is installed via 'pip install html2text'.")
-                    self.query_one("#browser_status", Static).update("Error fetching URL.")
-                except Exception as e:
-                    self.query_one("#browser_content", Static).update(f"An unexpected error occurred: {e}\n\nNote: A full TUI web browser is a complex feature requiring a dedicated rendering engine. This is a placeholder. Ensure 'html2text' is installed via 'pip install html2text'.")
-                    self.query_one("#browser_status", Static).update("An unexpected error occurred.")
-            else:
-                self.query_one("#browser_content", Static).update("Please enter a URL.")
-                self.query_one("#browser_status", Static).update("TUI Web Browser (Limited Functionality)")
-
-class PomodoroTimerScreen(BaseScreen):
-    BINDINGS = [
-        Binding("escape", "pop_screen", "Back"),
-    ]
-
-    def __init__(self):
-        super().__init__()
-        self.timer_running = False
-        self.time_left = 25 * 60  # 25 minutes
-        self.timer_thread = None
-
-    def body(self) -> ComposeResult:
-        mins, secs = divmod(self.time_left, 60)
-        yield Static(f"Pomodoro Timer: {mins:02d}:{secs:02d}", id="timer_display")
-        yield Button("Start", id="start")
-        yield Button("Stop", id="stop")
-        yield Button("Reset", id="reset")
-        yield Button("Back", id="back")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "start":
-            if not self.timer_running:
-                self.timer_running = True
-                self.timer_thread = threading.Thread(target=self.run_timer, daemon=True)
-                self.timer_thread.start()
-        elif event.button.id == "stop":
-            self.timer_running = False
-        elif event.button.id == "reset":
-            self.timer_running = False
-            self.time_left = 25 * 60
-            self.update_timer_display()
-        elif event.button.id == "back":
-            self.timer_running = False
-            self.app.pop_screen()
-
-    def run_timer(self):
-        while self.timer_running and self.time_left > 0:
-            time.sleep(1)
-            self.time_left -= 1
-            self.call_from_thread(self.update_timer_display) # Use call_from_thread for UI updates
-
-    def update_timer_display(self):
-        mins, secs = divmod(self.time_left, 60)
-        self.query_one("#timer_display", Static).update(f"Pomodoro Timer: {mins:02d}:{secs:02d}")
-
 class BackgroundSelectorScreen(BaseScreen):
-    def body(self) -> ComposeResult:
+    def compose(self) -> ComposeResult: # Changed from body to compose
         yield Static("Select a background:")
         yield Button("Default Background", id="bg_default")
         yield Button("Blue Theme", id="bg_blue")
@@ -1008,39 +858,56 @@ class BackgroundSelectorScreen(BaseScreen):
             self.query_one(Static).update("Background set to Green Theme.")
 
 
-class SystemInfoScreen(BaseScreen):
-    def body(self) -> ComposeResult:
-        sysinfo = f"OS: {platform.system()} {platform.release()}\n"
-        sysinfo += f"Python: {platform.python_version()}\n"
-        sysinfo += f"Machine: {platform.machine()}\n"
-        sysinfo += f"Processor: {platform.processor()}\n"
-        yield Static(sysinfo)
-        yield Button("Back", id="back")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.app.pop_screen()
-
 class FileBrowserScreen(BaseScreen):
     def __init__(self, path=None):
         super().__init__()
         self.path = path or os.getcwd()
 
-    def body(self) -> ComposeResult:
+    def compose(self) -> ComposeResult: # Changed from body to compose
         yield Static(f"Current Directory: {self.path}")
         yield Button("..", id="parent_dir") # Button to go up one directory
         yield Button("New File", id="new_file") # Button to create a new file
 
-        try:
-            app.screen.mount(bar)
-        except Exception:
-            app.mount(bar)
-    def remove_bar():
-        try:
-            bar.remove()
-        except Exception:
-            pass
-    app.set_timer(2.5, remove_bar)
+        # Placeholder for bar and app.set_timer, as they are not defined in this scope
+        # try:
+        #     app.screen.mount(bar)
+        # except Exception:
+        #     app.mount(bar)
+        # def remove_bar():
+        #     try:
+        #         bar.remove()
+        #     except Exception:
+        #         pass
+        # app.set_timer(2.5, remove_bar)
+
+# --- Help/About Screen ---
+class HelpScreen(Screen):
+    BINDINGS = [
+        Binding("escape", "pop_screen", "Back"),
+    ]
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static("ZeldaCLI OS - About", id="help_title")
+        yield Static(
+            "[b]Version:[/b] 1.0.0\n"
+            "[b]Developer:[/b] Cline\n"
+            "[b]Description:[/b] A command-line interface operating system built with Textual.\n"
+            "Features include: Clock, System Monitor, Notes, File Explorer, Calculator, Terminal, Reminders, Calendar, Chess, Maze Game, Mail Client, and a basic Web Browser.\n\n"
+            "[b]Usage Tips:[/b]\n"
+            "  - Use Tab/Shift+Tab to navigate between widgets/inputs.\n"
+            "  - Use Ctrl+N for Notifications, Ctrl+F for Favorites.\n"
+            "  - Right-click taskbar items for window controls.\n"
+            "  - Configure API keys in .env for Weather and News widgets.\n"
+            "  - Mail service requires SMTP server details in .env.\n"
+            "  - Drag and resize widgets on the desktop.\n"
+            "  - Enjoy exploring the CLI OS!\n",
+            id="help_content"
+        )
+        yield Button("Back", id="back_help")
+        yield Footer()
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "back_help":
+            self.app.pop_screen()
 
 # --- Notification Center ---
 class NotificationCenter(Static):
@@ -1354,6 +1221,10 @@ class CalendarWidget(Static):
             self.refresh()
 
 # --- Widget Gallery ---
+class HelpWidget(Static):
+    def render(self) -> str:
+        return "Help/About Widget (Click to open app)"
+
 class WidgetGallery(Static):
     def compose(self) -> ComposeResult:
         yield Label("[b][#ffd700]App Store (Widget Gallery)[/]")
@@ -1365,6 +1236,9 @@ class WidgetGallery(Static):
         yield Button("💻 Terminal", id="add_terminal")
         yield Button("⏰ Reminders", id="add_reminders")
         yield Button("📅 Calendar", id="add_calendar")
+        yield Button("🌐 Web Browser", id="add_web_browser")
+        yield Button("❌⭕ Tic-Tac-Toe", id="add_tictactoe")
+        yield Button("❓ Help/About", id="add_help")
         yield Label("[dim]More widgets coming soon![/]")
     def on_button_pressed(self, event: Button.Pressed):
         widget_map = {
@@ -1376,10 +1250,16 @@ class WidgetGallery(Static):
             "add_terminal": (TerminalWidget, "Terminal"),
             "add_reminders": (RemindersWidget, "Reminders"),
             "add_calendar": (CalendarWidget, "Calendar"),
+            "add_web_browser": (WebBrowserScreen, "Web Browser"),
+            "add_tictactoe": (TicTacToeScreen, "Tic-Tac-Toe"),
+            "add_help": (HelpScreen, "Help_About"), # Changed "Help/About" to "Help_About"
         }
         if event.button.id in widget_map:
             widget_cls, title = widget_map[event.button.id]
-            self.app.add_widget(widget_cls(), title)
+            if title in ["Web Browser", "Tic-Tac-Toe", "Help_About"]: # These are screens, not widgets
+                self.app.push_screen(widget_cls())
+            else:
+                self.app.add_widget(widget_cls(), title)
 
 # --- Custom Taskbar Context Menu ---
 class TaskbarMenu(Vertical):
@@ -1399,8 +1279,17 @@ class TaskbarMenu(Vertical):
             self.app.close_app(self.app_title)
         self.remove()
 
+# --- Desktop Widget Container ---
+class Desktop(Container):
+    ascii_art = reactive("")
+    background = reactive(THEMES["retro"]["background"])
+    def render(self):
+        art = self.ascii_art
+        bg = self.background
+        return f"[on {bg}]{art}"
+
 # --- Dashboard Container ---
-class Dashboard(Vertical):
+class Dashboard(Desktop):
     def compose(self) -> ComposeResult:
         for app in self.app.open_apps:
             yield app["widget"]
@@ -1419,14 +1308,17 @@ class AppLauncherMenu(Horizontal):
             ("Terminal", TerminalWidget, "💻"),
             ("Reminders", RemindersWidget, "⏰"),
             ("Calendar", CalendarWidget, "📅"),
+            ("Web Browser", WebBrowserScreen, "🌐"),
+            ("Tic-Tac-Toe", TicTacToeScreen, "❌⭕"),
+            ("Help/About", HelpScreen, "❓"),
         ]
     def compose(self) -> ComposeResult:
         for name, _, icon in self.apps:
-            safe_id = f"launch_{name.replace(' ', '_')}"
+            safe_id = f"launch_{name.replace(' ', '_').replace('/', '_')}" # Replaced / with _
             yield Button(f"{icon} {name}", id=safe_id)
     def on_button_pressed(self, event):
         for name, widget_cls, _ in self.apps:
-            safe_id = f"launch_{name.replace(' ', '_')}"
+            safe_id = f"launch_{name.replace(' ', '_').replace('/', '_')}" # Replaced / with _
             if event.button.id == safe_id:
                 self._app.open_or_focus_app(widget_cls, name)
                 self.remove()
@@ -1453,15 +1345,6 @@ class Taskbar(Horizontal):
         if event.button == 3 and getattr(event.control, "id", None) and event.control.id.startswith("task_"):
             app_title = event.control.id.replace("task_", "")
             self.app.show_taskbar_menu(app_title, event.control)
-
-# --- Desktop Widget Container ---
-class Desktop(Container):
-    ascii_art = reactive("")
-    background = reactive(THEMES["retro"]["background"])
-    def render(self):
-        art = self.ascii_art
-        bg = self.background
-        return f"[on {bg}]{art}"
 
 # --- Time Widget ---
 class TimeWidget(Static):
@@ -1524,8 +1407,8 @@ class ZeldaCLIOS(App):
         self.set_interval(1, self.update_system_time)
         self.push_screen(LoginScreen())
         # Always open Weather and Time widgets on startup
-        self.open_or_focus_app(WeatherWidget, "Weather")
-        self.open_or_focus_app(TimeWidget, "Time")
+        self.open_app(WeatherWidget, "Weather")
+        self.open_app(TimeWidget, "Time")
         notify(self, "ZeldaCLI OS started!", "info")
     def update_system_time(self):
         from datetime import datetime
@@ -1542,10 +1425,30 @@ class ZeldaCLIOS(App):
         self.widget_layouts = []
         self.favorites = []
         self.avatar = ":)"
-        self.desktop.remove_children()
+        self.dashboard.remove_children()
         self.push_screen(LoginScreen())
-    def add_widget(self, widget, title, *args, **kwargs):
-        self.open_or_focus_app(lambda: widget, title)
+    def open_app(self, widget_cls, title, pos_x=0, pos_y=0, width=30, height=5):
+        # Check if a widget of this title is already open
+        for app_info in self.open_apps:
+            if app_info["title"] == title:
+                if app_info["minimized"]:
+                    self.restore_app(title)
+                self.focus_app(title)
+                return
+
+        # If not open, create and add it
+        if title in ["Web Browser", "Tic-Tac-Toe", "Help_About", "Chess Game", "Maze Game", "Mail Service"]: # These are screens
+            self.push_screen(widget_cls())
+        else: # These are desktop widgets
+            new_widget_instance = widget_cls()
+            closable_widget = ClosableWidget(new_widget_instance, title, self, pos_x, pos_y, width, height)
+            self.dashboard.mount(closable_widget)
+            self.open_apps.append({"title": title, "widget": closable_widget, "focused": True, "minimized": False})
+            self.focus_app(title) # Focus the newly added widget
+        self.update_taskbar()
+        self.refresh()
+        self.save_layout()
+
     def remove_widget(self, widget):
         self.open_apps = [app for app in self.open_apps if app["widget"] != widget]
         self.update_taskbar()
@@ -1558,14 +1461,14 @@ class ZeldaCLIOS(App):
         self.refresh()
     def set_background(self, color):
         self.background_color = color
-        self.desktop.background = color
+        self.dashboard.background = color
         self.save_layout()
         self.refresh()
     def set_ascii_art(self, art_name):
         if art_name in ASCII_ARTS:
-            self.desktop.ascii_art = ASCII_ARTS[art_name]
+            self.dashboard.ascii_art = ASCII_ARTS[art_name]
         else:
-            self.desktop.ascii_art = ""
+            self.dashboard.ascii_art = ""
         self.save_layout()
         self.refresh()
     def set_theme(self, theme):
@@ -1573,7 +1476,7 @@ class ZeldaCLIOS(App):
             self.user_theme = theme
             t = THEMES[theme]
             self.background_color = t["background"]
-            self.desktop.background = t["background"]
+            self.dashboard.background = t["background"]
             self.save_layout()
             self.refresh()
             notify(self, f"Theme set to {theme}", "info")
@@ -1585,7 +1488,7 @@ class ZeldaCLIOS(App):
         if not self.username:
             return
         widgets = []
-        for w in self.desktop.children:
+        for w in self.dashboard.children:
             if isinstance(w, ClosableWidget):
                 widgets.append({
                     "title": w.title,
@@ -1596,7 +1499,7 @@ class ZeldaCLIOS(App):
                 })
         data = {
             "background": self.background_color,
-            "ascii_art": self.desktop.ascii_art,
+            "ascii_art": self.dashboard.ascii_art,
             "widgets": widgets,
             "user_theme": self.user_theme,
             "favorites": self.favorites,
@@ -1608,15 +1511,15 @@ class ZeldaCLIOS(App):
         if not self.username:
             return
         data = load_config(self.username)
-        self.desktop.remove_children()
+        self.dashboard.remove_children()
         self.running_widgets = set()
         self.favorites = data.get("favorites", ["Clock", "Notes"])
         self.avatar = data.get("avatar", ":)")
         self.calendar_events = data.get("calendar_events", [])
         if data:
             self.background_color = data.get("background", THEMES[self.user_theme]["background"])
-            self.desktop.background = self.background_color
-            self.desktop.ascii_art = data.get("ascii_art", "")
+            self.dashboard.background = self.background_color
+            self.dashboard.ascii_art = data.get("ascii_art", "")
             self.user_theme = data.get("user_theme", "retro")
             for w in data.get("widgets", []):
                 widget_map = {
@@ -1630,34 +1533,34 @@ class ZeldaCLIOS(App):
                     "Calendar": CalendarWidget,
                 }
                 widget_cls = widget_map.get(w["title"], ClockWidget)
-                self.add_widget(widget_cls(), w["title"], w["pos_x"], w["pos_y"], w["width"], w["height"])
+                self.open_app(widget_cls, w["title"], w["pos_x"], w["pos_y"], w["width"], w["height"])
         else:
-            self.add_widget(ClockWidget(), "Clock")
+            self.open_app(ClockWidget, "Clock")
     def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "clock":
-            self.add_widget(ClockWidget(), "Clock")
+            self.open_app(ClockWidget, "Clock")
         elif event.button.id == "sysmon":
-            self.add_widget(SysMonWidget(), "SysMon")
+            self.open_app(SysMonWidget, "SysMon")
         elif event.button.id == "notes":
-            self.add_widget(NotesWidget(), "Notes")
+            self.open_app(NotesWidget, "Notes")
         elif event.button.id == "fileexplorer":
-            self.add_widget(FileExplorerWidget(), "File Explorer")
+            self.open_app(FileExplorerWidget, "File Explorer")
         elif event.button.id == "calc":
-            self.add_widget(CalculatorWidget(), "Calculator")
+            self.open_app(CalculatorWidget, "Calculator")
         elif event.button.id == "terminal":
-            self.add_widget(TerminalWidget(), "Terminal")
+            self.open_app(TerminalWidget, "Terminal")
         elif event.button.id == "reminders":
-            self.add_widget(RemindersWidget(), "Reminders")
+            self.open_app(RemindersWidget, "Reminders")
         elif event.button.id == "calendar":
-            self.add_widget(CalendarWidget(), "Calendar")
+            self.open_app(CalendarWidget, "Calendar")
         elif event.button.id == "gallery":
-            self.add_widget(WidgetGallery(), "App Store")
+            self.open_app(WidgetGallery, "App Store")
         elif event.button.id == "notifcenter":
-            self.add_widget(NotificationCenter(), "Notification Center")
+            self.open_app(NotificationCenter, "Notification Center")
         elif event.button.id == "theme":
-            self.add_widget(ThemeWidget(), "Theme Switcher")
+            self.open_app(ThemeWidget, "Theme Switcher")
         elif event.button.id == "settings":
-            self.add_widget(SettingsWidget(), "Settings")
+            self.open_app(SettingsWidget, "Settings")
         elif event.button.id == "logout":
             self.logout()
     def toggle_favorite(self, widget_name):
@@ -1681,7 +1584,7 @@ class ZeldaCLIOS(App):
             "Calendar": CalendarWidget,
         }
         widget_cls = widget_map.get(widget_name, ClockWidget)
-        self.add_widget(widget_cls(), widget_name)
+        self.open_app(widget_cls, widget_name)
     def widget_icon(self, widget_name):
         icons = {
             "Clock": "🕒",
@@ -1692,10 +1595,13 @@ class ZeldaCLIOS(App):
             "Terminal": "💻",
             "Reminders": "⏰",
             "Calendar": "📅",
+            "Web Browser": "🌐",
+            "Tic-Tac-Toe": "❌⭕",
+            "Help_About": "❓", # Changed "Help/About" to "Help_About"
         }
         return icons.get(widget_name, "★")
     def action_open_notifcenter(self):
-        self.add_widget(NotificationCenter(), "Notification Center")
+        self.open_app(NotificationCenter, "Notification Center")
     def action_open_favorites(self):
         for fav in self.favorites:
             self.open_favorite(fav)
@@ -1740,17 +1646,6 @@ class ZeldaCLIOS(App):
                 child.remove()
         menu = AppLauncherMenu(self)
         self.mount(menu, before="#taskbar")
-    def open_or_focus_app(self, widget_cls, title):
-        for app in self.open_apps:
-            if app["title"] == title:
-                self.focus_app(title)
-                return
-        widget = widget_cls()
-        self.open_apps.append({"title": title, "widget": widget, "focused": True, "minimized": False})
-        self.focus_app(title)
-        self.update_taskbar()
-        self.refresh()
-        self.save_layout()
 
 if __name__ == "__main__":
     ZeldaCLIOS().run()
