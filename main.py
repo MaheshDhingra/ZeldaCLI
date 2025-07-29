@@ -743,6 +743,126 @@ def cli_account_operations(user_id):
         else:
             print("Invalid choice. Please try again.")
 
+def cli_user_profile_management(user_id):
+    while True:
+        print("\n--- User Profile Management ---")
+        print("1. View Profile")
+        print("2. Update Profile")
+        print("3. Back to Main Menu")
+        choice = input("Enter your choice: ")
+
+        if choice == '1':
+            user_details = get_user_details(user_id)
+            if user_details:
+                print("\n--- Your Profile ---")
+                print(f"Username: {user_details[0]}")
+                print(f"Full Name: {user_details[1] if user_details[1] else 'N/A'}")
+                print(f"Email: {user_details[2] if user_details[2] else 'N/A'}")
+                print(f"Phone Number: {user_details[3] if user_details[3] else 'N/A'}")
+                print(f"Address: {user_details[4] if user_details[4] else 'N/A'}")
+                print(f"Date of Birth: {user_details[5].strftime('%Y-%m-%d') if user_details[5] else 'N/A'}")
+                print("--------------------")
+            else:
+                print("Could not retrieve profile details.")
+        elif choice == '2':
+            print("\n--- Update Profile ---")
+            print("Enter new details (leave blank to keep current value):")
+            current_details = get_user_details(user_id)
+            
+            full_name = input(f"Full Name ({current_details[1] if current_details[1] else 'N/A'}): ")
+            email = input(f"Email ({current_details[2] if current_details[2] else 'N/A'}): ")
+            phone_number = input(f"Phone Number ({current_details[3] if current_details[3] else 'N/A'}): ")
+            address = input(f"Address ({current_details[4] if current_details[4] else 'N/A'}): ")
+            date_of_birth_str = input(f"Date of Birth (YYYY-MM-DD) ({current_details[5].strftime('%Y-%m-%d') if current_details[5] else 'N/A'}): ")
+
+            # Use current values if new input is blank
+            full_name = full_name if full_name else current_details[1]
+            email = email if email else current_details[2]
+            phone_number = phone_number if phone_number else current_details[3]
+            address = address if address else current_details[4]
+            date_of_birth_str = date_of_birth_str if date_of_birth_str else (current_details[5].strftime('%Y-%m-%d') if current_details[5] else None)
+
+            success, message = update_user_details(user_id, full_name, email, phone_number, address, date_of_birth_str)
+            print(message)
+        elif choice == '3':
+            break
+        else:
+            print("Invalid choice. Please try again.")
+
+def main():
+    create_tables()
+    logged_in_user_id = None
+    logged_in_username = None
+    logged_in_full_name = None
+
+    while True:
+        if logged_in_user_id is None:
+            print("\n--- Welcome to Internet Banking ---")
+            print("1. Register")
+            print("2. Login")
+            print("3. Exit")
+            choice = input("Enter your choice: ")
+
+            if choice == '1':
+                cli_register_user()
+            elif choice == '2':
+                user_id, username, full_name = cli_login_user()
+                if user_id:
+                    logged_in_user_id = user_id
+                    logged_in_username = username
+                    logged_in_full_name = full_name
+            elif choice == '3':
+                print("Exiting. Goodbye!")
+                break
+            else:
+                print("Invalid choice. Please try again.")
+        else:
+            print(f"\n--- Welcome, {logged_in_username}! ---")
+            print("1. Account Operations")
+            print("2. Card Operations")
+            print("3. View Transaction History")
+            print("4. Transfer Funds")
+            print("5. Loans")
+            print("6. Search Users")
+            print("7. Money Requests")
+            print("8. Public Transaction Feed") # New Feature 1
+            print("9. Bill Payments") # New Feature 2
+            print("10. User Profile") # New Feature 3
+            print("11. Logout")
+            choice = input("Enter your choice: ")
+
+            if choice == '1':
+                cli_account_operations(logged_in_user_id)
+            elif choice == '2':
+                cli_card_operations(logged_in_user_id)
+            elif choice == '3':
+                transactions_text = view_transaction_history(logged_in_user_id)
+                print(transactions_text)
+            elif choice == '4':
+                cli_transfer_funds(logged_in_user_id)
+            elif choice == '5':
+                cli_loans(logged_in_user_id)
+            elif choice == '6':
+                cli_search_users()
+            elif choice == '7':
+                cli_money_requests(logged_in_user_id)
+            elif choice == '8': # New Feature 1
+                cli_public_transaction_feed()
+            elif choice == '9': # New Feature 2
+                cli_bill_operations(logged_in_user_id)
+            elif choice == '10': # New Feature 3
+                cli_user_profile_management(logged_in_user_id)
+            elif choice == '11':
+                logged_in_user_id = None
+                logged_in_username = None
+                logged_in_full_name = None
+                print("Logged out successfully.")
+            else:
+                print("Invalid choice. Please try again.")
+
+if __name__ == "__main__":
+    main()
+
 def cli_public_transaction_feed():
     print("\n--- Public Transaction Feed ---")
     transactions = get_public_transactions()
@@ -914,6 +1034,426 @@ def cli_bill_operations(user_id):
         else:
             print("Invalid choice. Please try again.")
 
+def get_account_statement(user_id, start_date_str, end_date_str):
+    account_id = get_account_id_by_user_id(user_id)
+    if not account_id:
+        return False, "No account found for this user."
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        end_date = datetime.datetime.strptime(end_date_str, "%Y-%m-%d").date()
+
+        cur.execute("""
+            SELECT type, amount, timestamp, category
+            FROM transactions
+            WHERE account_id = %s AND timestamp::date BETWEEN %s AND %s
+            ORDER BY timestamp ASC;
+        """, (account_id, start_date, end_date))
+        transactions = cur.fetchall()
+        
+        statement = f"\n--- Account Statement for {start_date_str} to {end_date_str} ---\n"
+        if transactions:
+            for t in transactions:
+                statement += f"Date: {t[2].strftime('%Y-%m-%d %H:%M:%S')}, Type: {t[0].capitalize()}, Amount: ${t[1]:.2f}, Category: {t[3] if t[3] else 'N/A'}\n"
+        else:
+            statement += "No transactions found for this period."
+        statement += "--------------------------------------------------\n"
+        return True, statement
+    except ValueError:
+        return False, "Invalid date format. Please use YYYY-MM-DD."
+    except Exception as e:
+        return False, f"Failed to generate statement: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def get_loan_repayment_schedule(loan_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT amount, interest_rate, term_months, start_date, remaining_balance FROM loans WHERE id = %s;", (loan_id,))
+        loan_data = cur.fetchone()
+        if not loan_data:
+            return False, "Loan not found."
+
+        total_amount, interest_rate, term_months, start_date, remaining_balance = loan_data
+        total_amount = float(total_amount)
+        interest_rate = float(interest_rate)
+        term_months = int(term_months)
+        remaining_balance = float(remaining_balance)
+
+        if interest_rate == 0:
+            monthly_payment = total_amount / term_months
+        else:
+            monthly_interest_rate = interest_rate / 12
+            monthly_payment = (total_amount * monthly_interest_rate) / (1 - (1 + monthly_interest_rate)**(-term_months))
+
+        schedule = f"\n--- Loan Repayment Schedule for Loan ID {loan_id} ---\n"
+        schedule += f"Loan Amount: ${total_amount:.2f}\n"
+        schedule += f"Interest Rate: {interest_rate*100:.2f}%\n"
+        schedule += f"Term: {term_months} months\n"
+        schedule += f"Monthly Payment: ${monthly_payment:.2f}\n"
+        schedule += "--------------------------------------------------\n"
+        schedule += "{:<5} {:<15} {:<15} {:<15} {:<15}\n".format("Month", "Payment", "Interest", "Principal", "Balance")
+        schedule += "-"*75 + "\n"
+
+        current_balance = total_amount
+        for month in range(1, term_months + 1):
+            if current_balance <= 0:
+                break
+            
+            interest_payment = current_balance * monthly_interest_rate
+            principal_payment = monthly_payment - interest_payment
+            
+            if principal_payment > current_balance:
+                principal_payment = current_balance
+                monthly_payment = interest_payment + principal_payment
+
+            current_balance -= principal_payment
+            
+            schedule += "{:<5} {:<15.2f} {:<15.2f} {:<15.2f} {:<15.2f}\n".format(
+                month, monthly_payment, interest_payment, principal_payment, max(0, current_balance)
+            )
+        schedule += "--------------------------------------------------\n"
+        return True, schedule
+    except Exception as e:
+        return False, f"Failed to generate repayment schedule: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def change_password(user_id, old_password, new_password):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT password_hash FROM users WHERE id = %s;", (user_id,))
+        result = cur.fetchone()
+        if not result:
+            return False, "User not found."
+
+        stored_password_hash = result[0]
+        if not bcrypt.checkpw(old_password.encode('utf-8'), stored_password_hash.encode('utf-8')):
+            return False, "Incorrect old password."
+
+        new_password_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        cur.execute("UPDATE users SET password_hash = %s WHERE id = %s;", (new_password_hash, user_id))
+        conn.commit()
+        return True, "Password changed successfully."
+    except Exception as e:
+        conn.rollback()
+        return False, f"Failed to change password: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def search_transactions(user_id, transaction_type=None, min_amount=None, max_amount=None, start_date=None, end_date=None, category=None):
+    account_id = get_account_id_by_user_id(user_id)
+    if not account_id:
+        return False, "No account found for this user."
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    query = """
+        SELECT type, amount, timestamp, category, is_public
+        FROM transactions
+        WHERE account_id = %s
+    """
+    params = [account_id]
+
+    if transaction_type:
+        query += " AND type ILIKE %s"
+        params.append(f"%{transaction_type}%")
+    if min_amount is not None:
+        query += " AND amount >= %s"
+        params.append(min_amount)
+    if max_amount is not None:
+        query += " AND amount <= %s"
+        params.append(max_amount)
+    if start_date:
+        query += " AND timestamp::date >= %s"
+        params.append(start_date)
+    if end_date:
+        query += " AND timestamp::date <= %s"
+        params.append(end_date)
+    if category:
+        query += " AND category ILIKE %s"
+        params.append(f"%{category}%")
+
+    query += " ORDER BY timestamp DESC;"
+
+    try:
+        cur.execute(query, tuple(params))
+        transactions = cur.fetchall()
+        
+        if transactions:
+            results = "\n--- Search Results ---\n"
+            for t in transactions:
+                results += f"Date: {t[2].strftime('%Y-%m-%d %H:%M:%S')}, Type: {t[0].capitalize()}, Amount: ${t[1]:.2f}, Category: {t[3] if t[3] else 'N/A'}, Public: {t[4]}\n"
+            results += "----------------------"
+            return True, results
+        else:
+            return True, "No transactions found matching your criteria."
+    except Exception as e:
+        return False, f"Failed to search transactions: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def update_transaction_category(transaction_id, user_id, category):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # Verify the transaction belongs to the user's account
+        account_id = get_account_id_by_user_id(user_id)
+        if not account_id:
+            return False, "User account not found."
+
+        cur.execute("SELECT id FROM transactions WHERE id = %s AND account_id = %s;", (transaction_id, account_id))
+        if not cur.fetchone():
+            return False, "Transaction not found or does not belong to your account."
+
+        cur.execute("UPDATE transactions SET category = %s WHERE id = %s;", (category, transaction_id))
+        conn.commit()
+        return True, f"Transaction {transaction_id} categorized as '{category}'."
+    except Exception as e:
+        conn.rollback()
+        return False, f"Failed to update transaction category: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def cli_loan_repayment_schedule(user_id):
+    print("\n--- Loan Repayment Schedule ---")
+    loans = view_loans(user_id)
+    print(loans) # Display user's loans to help them choose
+    try:
+        loan_id = int(input("Enter Loan ID to view repayment schedule: "))
+        success, message = get_loan_repayment_schedule(loan_id)
+        print(message)
+    except ValueError:
+        print("Invalid Loan ID. Please enter a number.")
+
+def cli_search_transactions(user_id):
+    while True:
+        print("\n--- Search Transactions ---")
+        print("1. Search by Type")
+        print("2. Search by Amount Range")
+        print("3. Search by Date Range")
+        print("4. Search by Category")
+        print("5. Back to Main Menu")
+        choice = input("Enter your choice: ")
+
+        if choice == '1':
+            transaction_type = input("Enter transaction type (e.g., deposit, withdraw, transfer_in): ")
+            success, message = search_transactions(user_id, transaction_type=transaction_type)
+            print(message)
+        elif choice == '2':
+            try:
+                min_amount = float(input("Enter minimum amount: "))
+                max_amount = float(input("Enter maximum amount: "))
+                success, message = search_transactions(user_id, min_amount=min_amount, max_amount=max_amount)
+                print(message)
+            except ValueError:
+                print("Invalid amount. Please enter a number.")
+        elif choice == '3':
+            start_date_str = input("Enter start date (YYYY-MM-DD): ")
+            end_date_str = input("Enter end date (YYYY-MM-DD): ")
+            success, message = search_transactions(user_id, start_date=start_date_str, end_date=end_date_str)
+            print(message)
+        elif choice == '4':
+            category = input("Enter category: ")
+            success, message = search_transactions(user_id, category=category)
+            print(message)
+        elif choice == '5':
+            break
+        else:
+            print("Invalid choice. Please try again.")
+
+def cli_change_password(user_id):
+    print("\n--- Change Password ---")
+    old_password = input("Enter old password: ")
+    new_password = input("Enter new password: ")
+    confirm_new_password = input("Confirm new password: ")
+
+    if new_password != confirm_new_password:
+        print("New passwords do not match.")
+        return
+
+    success, message = change_password(user_id, old_password, new_password)
+    print(message)
+
+def cli_transaction_categorization(user_id):
+    while True:
+        print("\n--- Transaction Categorization ---")
+        print("1. View My Transactions (to get IDs)")
+        print("2. Categorize a Transaction")
+        print("3. Back to Main Menu")
+        choice = input("Enter your choice: ")
+
+        if choice == '1':
+            transactions_text = view_transaction_history(user_id)
+            print(transactions_text)
+        elif choice == '2':
+            try:
+                transaction_id = int(input("Enter Transaction ID to categorize: "))
+                category = input("Enter Category (e.g., Food, Transport, Bills): ")
+                success, message = update_transaction_category(transaction_id, user_id, category)
+                print(message)
+            except ValueError:
+                print("Invalid Transaction ID. Please enter a number.")
+        elif choice == '3':
+            break
+        else:
+            print("Invalid choice. Please try again.")
+
+def cli_atm_locator():
+    print("\n--- ATM Locator ---")
+    print("This is a conceptual feature. In a real application, this would integrate with a map service.")
+    print("Searching for nearby ATMs...")
+    print("ATM 1: 123 Main St, Anytown")
+    print("ATM 2: 456 Oak Ave, Anytown")
+    print("ATM 3: 789 Pine Ln, Anytown")
+    print("-------------------")
+
+def add_recurring_transfer(from_account_id, to_account_number, amount, frequency, next_transfer_date_str, description):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        next_transfer_date = datetime.datetime.strptime(next_transfer_date_str, "%Y-%m-%d").date()
+        cur.execute("""
+            INSERT INTO recurring_transfers (from_account_id, to_account_number, amount, frequency, next_transfer_date, description, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s);
+        """, (from_account_id, to_account_number, amount, frequency, next_transfer_date, description, 'active'))
+        conn.commit()
+        return True, "Recurring transfer added successfully."
+    except ValueError:
+        conn.rollback()
+        return False, "Invalid date format. Please use YYYY-MM-DD."
+    except Exception as e:
+        conn.rollback()
+        return False, f"Failed to add recurring transfer: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def get_user_recurring_transfers(user_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    account_id = get_account_id_by_user_id(user_id)
+    if not account_id:
+        return []
+    cur.execute("""
+        SELECT id, to_account_number, amount, frequency, next_transfer_date, description, status
+        FROM recurring_transfers
+        WHERE from_account_id = %s
+        ORDER BY next_transfer_date ASC;
+    """, (account_id,))
+    transfers = cur.fetchall()
+    cur.close()
+    conn.close()
+    return transfers
+
+def process_recurring_transfers():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, from_account_id, to_account_number, amount, frequency, next_transfer_date
+        FROM recurring_transfers
+        WHERE status = 'active' AND next_transfer_date <= CURRENT_DATE;
+    """)
+    pending_transfers = cur.fetchall()
+
+    for transfer in pending_transfers:
+        transfer_id, from_account_id, to_account_number, amount, frequency, next_transfer_date = transfer
+        
+        from_user_id = get_user_id_by_account_id(from_account_id)
+        if not from_user_id:
+            print(f"Error processing recurring transfer {transfer_id}: Sender user not found.")
+            continue
+
+        success, message = transfer_funds(from_user_id, to_account_number, amount)
+        if success:
+            # Update next_transfer_date
+            new_next_transfer_date = next_transfer_date
+            if frequency == 'daily':
+                new_next_transfer_date += datetime.timedelta(days=1)
+            elif frequency == 'weekly':
+                new_next_transfer_date += datetime.timedelta(weeks=1)
+            elif frequency == 'monthly':
+                new_next_transfer_date = (new_next_transfer_date + datetime.timedelta(days=30)).replace(day=min(new_next_transfer_date.day, (new_next_transfer_date + datetime.timedelta(days=30)).day)) # Simple monthly increment
+            
+            cur.execute("UPDATE recurring_transfers SET next_transfer_date = %s WHERE id = %s;", (new_next_transfer_date, transfer_id))
+            print(f"Processed recurring transfer {transfer_id}: {message}")
+        else:
+            print(f"Failed to process recurring transfer {transfer_id}: {message}")
+            # Optionally, update status to 'failed' or 'pending_retry'
+            # cur.execute("UPDATE recurring_transfers SET status = 'failed' WHERE id = %s;", (transfer_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def get_user_id_by_account_id(account_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT user_id FROM accounts WHERE id = %s;", (account_id,))
+    user_id = cur.fetchone()
+    cur.close()
+    conn.close()
+    return user_id[0] if user_id else None
+
+def cli_account_statement(user_id):
+    print("\n--- Generate Account Statement ---")
+    start_date_str = input("Enter Start Date (YYYY-MM-DD): ")
+    end_date_str = input("Enter End Date (YYYY-MM-DD): ")
+    
+    success, message = get_account_statement(user_id, start_date_str, end_date_str)
+    print(message)
+
+def cli_recurring_transfers(user_id):
+    while True:
+        print("\n--- Recurring Transfers ---")
+        print("1. Add New Recurring Transfer")
+        print("2. View My Recurring Transfers")
+        print("3. Process Pending Recurring Transfers (Admin/System Only)") # For demonstration, user can trigger
+        print("4. Back to Main Menu")
+        choice = input("Enter your choice: ")
+
+        if choice == '1':
+            print("\n--- Add New Recurring Transfer ---")
+            to_account_number = input("Recipient Account Number: ")
+            try:
+                amount = float(input("Amount: "))
+                frequency = input("Frequency (daily, weekly, monthly): ").lower()
+                next_transfer_date_str = input("Next Transfer Date (YYYY-MM-DD): ")
+                
+                account_id = get_account_id_by_user_id(user_id)
+                if account_id:
+                    success, message = add_recurring_transfer(account_id, to_account_number, amount, frequency, next_transfer_date_str, "Recurring Transfer")
+                    print(message)
+                else:
+                    print("Error: Your account not found.")
+            except ValueError:
+                print("Invalid amount. Please enter a number.")
+        elif choice == '2':
+            print("\n--- My Recurring Transfers ---")
+            transfers = get_user_recurring_transfers(user_id)
+            if transfers:
+                for t in transfers:
+                    print(f"ID: {t[0]}, To: {t[1]}, Amount: ${t[2]:.2f}, Freq: {t[3].capitalize()}, Next Date: {t[4]}, Status: {t[6].capitalize()}")
+            else:
+                print("No recurring transfers found.")
+        elif choice == '3':
+            print("\n--- Processing Recurring Transfers ---")
+            process_recurring_transfers()
+            print("Recurring transfers processed.")
+        elif choice == '4':
+            break
+        else:
+            print("Invalid choice. Please try again.")
+
 def main():
     create_tables()
     logged_in_user_id = None
@@ -952,7 +1492,15 @@ def main():
             print("7. Money Requests")
             print("8. Public Transaction Feed") # New Feature 1
             print("9. Bill Payments") # New Feature 2
-            print("10. Logout")
+            print("10. User Profile") # New Feature 3
+            print("11. Account Statement") # New Feature 4
+            print("12. Recurring Transfers") # New Feature 5
+            print("13. Loan Repayment Schedule") # New Feature 6
+            print("14. Transaction Categorization") # New Feature 7
+            print("15. Search Transactions") # New Feature 8
+            print("16. Change Password") # New Feature 9
+            print("17. ATM Locator") # New Feature 10
+            print("18. Logout")
             choice = input("Enter your choice: ")
 
             if choice == '1':
@@ -974,7 +1522,23 @@ def main():
                 cli_public_transaction_feed()
             elif choice == '9': # New Feature 2
                 cli_bill_operations(logged_in_user_id)
-            elif choice == '10':
+            elif choice == '10': # New Feature 3
+                cli_user_profile_management(logged_in_user_id)
+            elif choice == '11': # New Feature 4
+                cli_account_statement(logged_in_user_id)
+            elif choice == '12': # New Feature 5
+                cli_recurring_transfers(logged_in_user_id)
+            elif choice == '13': # New Feature 6
+                cli_loan_repayment_schedule(logged_in_user_id)
+            elif choice == '14': # New Feature 7
+                cli_transaction_categorization(logged_in_user_id)
+            elif choice == '15': # New Feature 8
+                cli_search_transactions(logged_in_user_id)
+            elif choice == '16': # New Feature 9
+                cli_change_password(logged_in_user_id)
+            elif choice == '17': # New Feature 10
+                cli_atm_locator()
+            elif choice == '18':
                 logged_in_user_id = None
                 logged_in_username = None
                 logged_in_full_name = None
