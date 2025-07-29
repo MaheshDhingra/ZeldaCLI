@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import bcrypt
 import random
 import datetime
-import re # Import regex module
+import re
 load_dotenv()
 
 class BankAccount:
@@ -75,15 +75,6 @@ def create_tables():
     cur = conn.cursor()
     try:
         cur.execute("""
-            -- DROP TABLE IF EXISTS chats CASCADE;
-            -- DROP TABLE IF EXISTS money_requests CASCADE;
-            -- DROP TABLE IF EXISTS loan_payments CASCADE;
-            -- DROP TABLE IF EXISTS loans CASCADE;
-            -- DROP TABLE IF EXISTS cards CASCADE;
-            -- DROP TABLE IF EXISTS transactions CASCADE;
-            -- DROP TABLE IF EXISTS accounts CASCADE;
-            -- DROP TABLE IF EXISTS users CASCADE;
-
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
                 username VARCHAR(50) UNIQUE NOT NULL,
@@ -104,18 +95,18 @@ def create_tables():
             CREATE TABLE IF NOT EXISTS transactions (
                 id SERIAL PRIMARY KEY,
                 account_id INTEGER REFERENCES accounts(id),
-                type VARCHAR(20) NOT NULL, -- e.g., 'deposit', 'withdraw', 'transfer_in', 'transfer_out', 'public_transfer', 'bill_payment', 'loan_payment'
+                type VARCHAR(20) NOT NULL,
                 amount DECIMAL(10, 2) NOT NULL,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 is_public BOOLEAN DEFAULT FALSE,
-                category VARCHAR(50) -- New column for categorization
+                category VARCHAR(50)
             );
             CREATE TABLE IF NOT EXISTS recurring_transfers (
                 id SERIAL PRIMARY KEY,
                 from_account_id INTEGER REFERENCES accounts(id),
                 to_account_number VARCHAR(20) NOT NULL,
                 amount DECIMAL(10, 2) NOT NULL,
-                frequency VARCHAR(20) NOT NULL, -- e.g., 'daily', 'weekly', 'monthly'
+                frequency VARCHAR(20) NOT NULL,
                 next_transfer_date DATE NOT NULL,
                 description TEXT,
                 status VARCHAR(20) DEFAULT 'active'
@@ -126,7 +117,7 @@ def create_tables():
                 bill_name VARCHAR(100) NOT NULL,
                 due_date DATE NOT NULL,
                 amount DECIMAL(10, 2) NOT NULL,
-                status VARCHAR(20) DEFAULT 'pending' -- 'pending', 'paid', 'overdue'
+                status VARCHAR(20) DEFAULT 'pending'
             );
             CREATE TABLE IF NOT EXISTS cards (
                 id SERIAL PRIMARY KEY,
@@ -134,7 +125,7 @@ def create_tables():
                 card_number VARCHAR(16) UNIQUE NOT NULL,
                 expiry_date VARCHAR(5) NOT NULL,
                 cvv VARCHAR(3) NOT NULL,
-                card_type VARCHAR(10) NOT NULL, -- 'credit' or 'debit'
+                card_type VARCHAR(10) NOT NULL,
                 issue_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS loans (
@@ -198,11 +189,9 @@ def transfer_funds(from_user_id, to_account_number, amount):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        # Deduct from sender
         cur.execute("UPDATE accounts SET balance = balance - %s WHERE user_id = %s;", (amount, from_user_id))
         record_transaction(get_account_id_by_user_id(from_user_id), 'transfer_out', amount)
 
-        # Add to recipient
         cur.execute("UPDATE accounts SET balance = balance + %s WHERE id = %s;", (amount, to_account_id))
         record_transaction(to_account_id, 'transfer_in', amount)
 
@@ -357,7 +346,6 @@ def register_user(username, password, full_name, email, phone_number, address, d
                     (username, hashed_password, full_name, email, phone_number, address, date_of_birth))
         user_id = cur.fetchone()[0]
         conn.commit()
-        # Create a default bank account for the new user
         account_number = ''.join([str(random.randint(0, 9)) for _ in range(10)])
         cur.execute("INSERT INTO accounts (user_id, account_number, balance) VALUES (%s, %s, %s);", (user_id, account_number, 0.0))
         conn.commit()
@@ -466,7 +454,7 @@ def generate_card(user_id, card_type):
         return False, "Database connection failed."
     cur = conn.cursor()
     card_number = ''.join([str(random.randint(0, 9)) for _ in range(16)])
-    expiry_date = (datetime.datetime.now() + datetime.timedelta(days=365*4)).strftime("%m/%y") # 4 years from now
+    expiry_date = (datetime.datetime.now() + datetime.timedelta(days=365*4)).strftime("%m/%y")
     cvv = ''.join([str(random.randint(0, 9)) for _ in range(3)])
 
     try:
@@ -790,7 +778,7 @@ def pay_bill(user_id, bill_id):
         if account.balance < amount:
             return False, "Insufficient balance to pay this bill."
 
-        if account.withdraw(amount): # This will also save the balance
+        if account.withdraw(amount):
             cur.execute("UPDATE bills SET status = 'paid' WHERE id = %s;", (bill_id,))
             record_transaction(account.account_id, 'bill_payment', amount, category='Bill Payment')
             conn.commit()
@@ -808,7 +796,6 @@ def pay_bill(user_id, bill_id):
         cur.close()
         conn.close()
 
-# CLI Design Constants
 LINE_SEP = "=" * 50
 SUB_LINE_SEP = "-" * 50
 MENU_WIDTH = 50
@@ -832,7 +819,6 @@ def print_message(message, type="info"):
     else:
         print(f"\n[INFO] {message}\n")
 
-# --- Input Validation Helper Functions ---
 def get_validated_string_input(prompt, min_length=1):
     while True:
         value = input(prompt).strip()
@@ -864,7 +850,6 @@ def get_validated_int_input(prompt, min_value=1):
             print_message("Invalid input. Please enter an integer.", "error")
 
 def get_validated_email_input(prompt):
-    # More robust email regex
     email_regex = r"^(?:[a-zA-Z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-zA-Z0-9!#$%&'*+/=?^_`{|}~-]+)*|\"(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])*\")@(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?|\[(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?|[a-zA-Z0-9-]*[a-zA-Z0-9]:(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x5f-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\])$"
     while True:
         email = input(prompt).strip()
@@ -874,8 +859,6 @@ def get_validated_email_input(prompt):
             print_message("Invalid email format. Please enter a valid email address (e.g., user@example.com).", "error")
 
 def get_validated_phone_input(prompt):
-    # More flexible phone number regex for various international formats
-    # Allows for optional leading +, digits, spaces, hyphens, and parentheses
     phone_regex = r"^\+?[\d\s\-\(\)]{7,20}$" 
     while True:
         phone = input(prompt).strip()
@@ -896,7 +879,7 @@ def get_validated_date_input(prompt):
 def get_validated_account_number_input(prompt):
     while True:
         account_number = input(prompt).strip()
-        if account_number.isdigit() and len(account_number) == 10: # Assuming 10-digit account numbers
+        if account_number.isdigit() and len(account_number) == 10:
             return account_number
         else:
             print_message("Invalid account number. Must be a 10-digit number.", "error")
@@ -955,7 +938,7 @@ def cli_account_operations(user_id):
                 record_transaction(get_account_id_by_user_id(user_id), 'deposit', amount)
                 print_message(f"Successfully deposited ${amount:.2f}.", "success")
             else:
-                print_message("Deposit failed.", "error") # This message is redundant with get_validated_float_input, but kept for consistency
+                print_message("Deposit failed.", "error")
         elif choice == '2':
             amount = get_validated_float_input("Enter amount to withdraw: ")
             if account.withdraw(amount):
