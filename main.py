@@ -48,16 +48,16 @@ def create_tables():
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("""
-        DROP TABLE IF EXISTS chats CASCADE;
-        DROP TABLE IF EXISTS money_requests CASCADE;
-        DROP TABLE IF EXISTS loan_payments CASCADE;
-        DROP TABLE IF EXISTS loans CASCADE;
-        DROP TABLE IF EXISTS cards CASCADE;
-        DROP TABLE IF EXISTS transactions CASCADE;
-        DROP TABLE IF EXISTS accounts CASCADE;
-        DROP TABLE IF EXISTS users CASCADE;
+        -- DROP TABLE IF EXISTS chats CASCADE;
+        -- DROP TABLE IF EXISTS money_requests CASCADE;
+        -- DROP TABLE IF EXISTS loan_payments CASCADE;
+        -- DROP TABLE IF EXISTS loans CASCADE;
+        -- DROP TABLE IF EXISTS cards CASCADE;
+        -- DROP TABLE IF EXISTS transactions CASCADE;
+        -- DROP TABLE IF EXISTS accounts CASCADE;
+        -- DROP TABLE IF EXISTS users CASCADE;
 
-        CREATE TABLE users (
+        CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             username VARCHAR(50) UNIQUE NOT NULL,
             password_hash VARCHAR(255) NOT NULL,
