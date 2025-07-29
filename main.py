@@ -4,22 +4,34 @@ from dotenv import load_dotenv
 import bcrypt
 import random
 import datetime
-from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Button, Input, Label, Static
-from textual.containers import VerticalScroll, Vertical
-from textual.screen import Screen
-
 load_dotenv()
 
 class BankAccount:
-    def __init__(self, user_id, account_number, balance=0.0):
+    def __init__(self, account_id, user_id, account_number, balance=0.0):
+        self.account_id = account_id
         self.user_id = user_id
         self.account_number = account_number
         self.balance = balance
 
+    def save_balance(self):
+        conn = get_db_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute("UPDATE accounts SET balance = %s WHERE id = %s;", (self.balance, self.account_id))
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            print(f"Error saving balance: {e}")
+            return False
+        finally:
+            cur.close()
+            conn.close()
+
     def deposit(self, amount):
         if amount > 0:
             self.balance += amount
+            self.save_balance()
             return True
         else:
             return False
@@ -27,6 +39,7 @@ class BankAccount:
     def withdraw(self, amount):
         if 0 < amount <= self.balance:
             self.balance -= amount
+            self.save_balance()
             return True
         else:
             return False
@@ -77,10 +90,29 @@ def create_tables():
         CREATE TABLE IF NOT EXISTS transactions (
             id SERIAL PRIMARY KEY,
             account_id INTEGER REFERENCES accounts(id),
-            type VARCHAR(20) NOT NULL, -- e.g., 'deposit', 'withdraw', 'transfer_in', 'transfer_out', 'public_transfer'
+            type VARCHAR(20) NOT NULL, -- e.g., 'deposit', 'withdraw', 'transfer_in', 'transfer_out', 'public_transfer', 'bill_payment', 'loan_payment'
             amount DECIMAL(10, 2) NOT NULL,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            is_public BOOLEAN DEFAULT FALSE
+            is_public BOOLEAN DEFAULT FALSE,
+            category VARCHAR(50) -- New column for categorization
+        );
+        CREATE TABLE IF NOT EXISTS recurring_transfers (
+            id SERIAL PRIMARY KEY,
+            from_account_id INTEGER REFERENCES accounts(id),
+            to_account_number VARCHAR(20) NOT NULL,
+            amount DECIMAL(10, 2) NOT NULL,
+            frequency VARCHAR(20) NOT NULL, -- e.g., 'daily', 'weekly', 'monthly'
+            next_transfer_date DATE NOT NULL,
+            description TEXT,
+            status VARCHAR(20) DEFAULT 'active'
+        );
+        CREATE TABLE IF NOT EXISTS bills (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id),
+            bill_name VARCHAR(100) NOT NULL,
+            due_date DATE NOT NULL,
+            amount DECIMAL(10, 2) NOT NULL,
+            status VARCHAR(20) DEFAULT 'pending' -- 'pending', 'paid', 'overdue'
         );
         CREATE TABLE IF NOT EXISTS cards (
             id SERIAL PRIMARY KEY,
@@ -220,6 +252,43 @@ def get_username_by_user_id(user_id):
     conn.close()
     return username[0] if username else None
 
+def get_user_details(user_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT username, full_name, email, phone_number, address, date_of_birth FROM users WHERE id = %s;", (user_id,))
+    user_details = cur.fetchone()
+    cur.close()
+    conn.close()
+    return user_details
+
+def update_user_details(user_id, full_name, email, phone_number, address, date_of_birth_str):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        date_of_birth = datetime.datetime.strptime(date_of_birth_str, "%Y-%m-%d").date()
+        cur.execute("""
+            UPDATE users
+            SET full_name = %s, email = %s, phone_number = %s, address = %s, date_of_birth = %s
+            WHERE id = %s;
+        """, (full_name, email, phone_number, address, date_of_birth, user_id))
+        conn.commit()
+        return True, "Profile updated successfully."
+    except ValueError:
+        conn.rollback()
+        return False, "Invalid date format. Please use YYYY-MM-DD."
+    except psycopg2.errors.UniqueViolation as e:
+        conn.rollback()
+        if "email" in str(e):
+            return False, "Email already registered by another user."
+        else:
+            return False, f"Failed to update profile: {e}"
+    except Exception as e:
+        conn.rollback()
+        return False, f"Failed to update profile: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
 def register_user(username, password, full_name, email, phone_number, address, date_of_birth):
     conn = get_db_connection()
     cur = conn.cursor()
@@ -270,16 +339,33 @@ def get_user_account(user_id):
     cur.close()
     conn.close()
     if account_data:
-        return BankAccount(user_id, account_data[1], float(account_data[2]))
+        return BankAccount(account_data[0], user_id, account_data[1], float(account_data[2]))
     return None
 
-def record_transaction(account_id, type, amount, is_public=False):
+def record_transaction(account_id, type, amount, is_public=False, category=None):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("INSERT INTO transactions (account_id, type, amount, is_public) VALUES (%s, %s, %s, %s);", (account_id, type, amount, is_public))
+    cur.execute("INSERT INTO transactions (account_id, type, amount, is_public, category) VALUES (%s, %s, %s, %s, %s);", (account_id, type, amount, is_public, category))
     conn.commit()
     cur.close()
     conn.close()
+
+def get_public_transactions():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT t.type, t.amount, t.timestamp, u.username
+        FROM transactions t
+        JOIN accounts a ON t.account_id = a.id
+        JOIN users u ON a.user_id = u.id
+        WHERE t.is_public = TRUE
+        ORDER BY t.timestamp DESC
+        LIMIT 20;
+    """)
+    transactions = cur.fetchall()
+    cur.close()
+    conn.close()
+    return transactions
 
 def generate_card(user_id, card_type):
     conn = get_db_connection()
@@ -489,13 +575,29 @@ def respond_to_money_request(request_id, user_id, action):
         from_user_id, to_user_id, amount = request_data
 
         if action == 'accept':
-            if transfer_funds(to_user_id, get_user_account(from_user_id).account_number, amount):
-                cur.execute("UPDATE money_requests SET status = 'accepted' WHERE id = %s;", (request_id,))
-                conn.commit()
-                return True, f"Money request {request_id} accepted. ${amount:.2f} transferred."
-            else:
-                conn.rollback()
-                return False, "Failed to transfer funds for acceptance."
+            # Get the recipient's account number (from_user_id is the one who requested, so they are the recipient)
+            recipient_account = get_user_account(from_user_id)
+            if not recipient_account:
+                return False, "Recipient account not found."
+
+            # The user responding (to_user_id) is the sender
+            sender_account = get_user_account(to_user_id)
+            if not sender_account:
+                return False, "Your account not found."
+
+            if sender_account.balance < amount:
+                return False, "Insufficient balance to accept request."
+
+            # Perform the transfer directly
+            cur.execute("UPDATE accounts SET balance = balance - %s WHERE user_id = %s;", (amount, to_user_id))
+            record_transaction(get_account_id_by_user_id(to_user_id), 'transfer_out', amount, category='Money Request Accepted')
+
+            cur.execute("UPDATE accounts SET balance = balance + %s WHERE user_id = %s;", (amount, from_user_id))
+            record_transaction(get_account_id_by_user_id(from_user_id), 'transfer_in', amount, category='Money Request Accepted')
+
+            cur.execute("UPDATE money_requests SET status = 'accepted' WHERE id = %s;", (request_id,))
+            conn.commit()
+            return True, f"Money request {request_id} accepted. ${amount:.2f} transferred."
         elif action == 'decline':
             cur.execute("UPDATE money_requests SET status = 'declined' WHERE id = %s;", (request_id,))
             conn.commit()
@@ -509,527 +611,376 @@ def respond_to_money_request(request_id, user_id, action):
         cur.close()
         conn.close()
 
-class MainScreen(Screen):
-    def __init__(self, app_instance, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
+def add_bill(user_id, bill_name, due_date_str, amount):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        due_date = datetime.datetime.strptime(due_date_str, "%Y-%m-%d").date()
+        cur.execute("INSERT INTO bills (user_id, bill_name, due_date, amount, status) VALUES (%s, %s, %s, %s, %s);",
+                    (user_id, bill_name, due_date, amount, 'pending'))
+        conn.commit()
+        return True, f"Bill '{bill_name}' for ${amount:.2f} due on {due_date_str} added successfully."
+    except ValueError:
+        conn.rollback()
+        return False, "Invalid date format. Please use YYYY-MM-DD."
+    except Exception as e:
+        conn.rollback()
+        return False, f"Failed to add bill: {e}"
+    finally:
+        cur.close()
+        conn.close()
 
-    def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Label("--- Welcome to Internet Banking ---", classes="title")
-            yield Button("Register", id="register_button", variant="primary")
-            yield Button("Login", id="login_button", variant="primary")
-            yield Button("Exit", id="exit_button", variant="error")
-            yield Label("", id="message_label", classes="message")
+def get_user_bills(user_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, bill_name, due_date, amount, status FROM bills WHERE user_id = %s ORDER BY due_date ASC;", (user_id,))
+    bills = cur.fetchall()
+    cur.close()
+    conn.close()
+    return bills
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "register_button":
-            self.app_instance.push_screen(RegisterScreen(self.app_instance))
-        elif event.button.id == "login_button":
-            self.app_instance.push_screen(LoginScreen(self.app_instance))
-        elif event.button.id == "exit_button":
-            self.app_instance.exit("Exiting. Goodbye!")
+def pay_bill(user_id, bill_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT bill_name, amount, status FROM bills WHERE id = %s AND user_id = %s;", (bill_id, user_id))
+        bill_data = cur.fetchone()
+        if not bill_data:
+            return False, "Bill not found or does not belong to you."
 
-class RegisterScreen(Screen):
-    def __init__(self, app_instance, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
+        bill_name, amount, status = bill_data
+        if status == 'paid':
+            return False, f"Bill '{bill_name}' is already paid."
 
-    def compose(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Label("--- Register ---", classes="title")
-            yield Label("Username:")
-            yield Input(placeholder="Enter desired username", id="reg_username")
-            yield Label("Password:")
-            yield Input(placeholder="Enter desired password", password=True, id="reg_password")
-            yield Label("Full Name:")
-            yield Input(placeholder="Enter your full name", id="reg_full_name")
-            yield Label("Email:")
-            yield Input(placeholder="Enter your email", id="reg_email")
-            yield Label("Phone Number:")
-            yield Input(placeholder="Enter your phone number", id="reg_phone_number")
-            yield Label("Address:")
-            yield Input(placeholder="Enter your address", id="reg_address")
-            yield Label("Date of Birth (YYYY-MM-DD):")
-            yield Input(placeholder="YYYY-MM-DD", id="reg_dob")
-            yield Button("Register", id="submit_register", variant="primary")
-            yield Button("Back", id="back_to_main", variant="default")
-            yield Label("", id="reg_message_label", classes="message")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "submit_register":
-            username = self.query_one("#reg_username", Input).value
-            password = self.query_one("#reg_password", Input).value
-            full_name = self.query_one("#reg_full_name", Input).value
-            email = self.query_one("#reg_email", Input).value
-            phone_number = self.query_one("#reg_phone_number", Input).value
-            address = self.query_one("#reg_address", Input).value
-            date_of_birth_str = self.query_one("#reg_dob", Input).value
-
-            try:
-                date_of_birth = datetime.datetime.strptime(date_of_birth_str, "%Y-%m-%d").date()
-                success, message = register_user(username, password, full_name, email, phone_number, address, date_of_birth)
-                self.query_one("#reg_message_label", Label).update(message)
-                if success:
-                    self.app_instance.pop_screen() # Go back to main menu on success
-            except ValueError:
-                self.query_one("#reg_message_label", Label).update("Invalid date format. Please use YYYY-MM-DD.")
-            except Exception as e:
-                self.query_one("#reg_message_label", Label).update(f"Registration failed: {e}")
-        elif event.button.id == "back_to_main":
-            self.app_instance.pop_screen()
-
-class LoginScreen(Screen):
-    def __init__(self, app_instance, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
-
-    def compose(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Label("--- Login ---", classes="title")
-            yield Label("Username:")
-            yield Input(placeholder="Enter username", id="login_username")
-            yield Label("Password:")
-            yield Input(placeholder="Enter password", password=True, id="login_password")
-            yield Button("Login", id="submit_login", variant="primary")
-            yield Button("Back", id="back_to_main", variant="default")
-            yield Label("", id="login_message_label", classes="message")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "submit_login":
-            username = self.query_one("#login_username", Input).value
-            password = self.query_one("#login_password", Input).value
-            
-            user_id, full_name, message = login_user(username, password)
-            self.query_one("#login_message_label", Label).update(message)
-            if user_id:
-                self.app_instance.logged_in_user_id = user_id
-                self.app_instance.logged_in_username = username
-                self.app_instance.logged_in_full_name = full_name
-                self.app_instance.push_screen(MainMenuScreen(self.app_instance))
-        elif event.button.id == "back_to_main":
-            self.app_instance.pop_screen()
-
-class MainMenuScreen(Screen):
-    def __init__(self, app_instance, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
-
-    def compose(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Label(f"--- Welcome, {self.app_instance.logged_in_username}! ---", classes="title")
-            yield Button("Account Operations", id="account_ops_button", variant="primary")
-            yield Button("Card Operations", id="card_ops_button", variant="primary")
-            yield Button("View Transaction History", id="view_transactions_button", variant="primary")
-            yield Button("Transfer Funds", id="transfer_funds_button", variant="primary")
-            yield Button("Loans", id="loans_button", variant="primary")
-            yield Button("Search Users", id="search_users_button", variant="primary")
-            yield Button("Money Requests", id="money_requests_button", variant="primary")
-            yield Button("Logout", id="logout_button", variant="error")
-            yield Label("", id="main_menu_message_label", classes="message")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "account_ops_button":
-            self.app_instance.push_screen(AccountOperationsScreen(self.app_instance))
-        elif event.button.id == "card_ops_button":
-            self.app_instance.push_screen(CardOperationsScreen(self.app_instance))
-        elif event.button.id == "view_transactions_button":
-            transactions_text = view_transaction_history(self.app_instance.logged_in_user_id)
-            self.app_instance.push_screen(InfoScreen(self.app_instance, "Transaction History", transactions_text))
-        elif event.button.id == "transfer_funds_button":
-            self.app_instance.push_screen(TransferFundsScreen(self.app_instance))
-        elif event.button.id == "loans_button":
-            self.app_instance.push_screen(LoansScreen(self.app_instance))
-        elif event.button.id == "search_users_button":
-            self.app_instance.push_screen(SearchUsersScreen(self.app_instance))
-        elif event.button.id == "money_requests_button":
-            self.app_instance.push_screen(MoneyRequestsScreen(self.app_instance))
-        elif event.button.id == "logout_button":
-            self.app_instance.logged_in_user_id = None
-            self.app_instance.logged_in_username = None
-            self.app_instance.logged_in_full_name = None
-            self.app_instance.pop_screen() # Go back to MainScreen
-
-class AccountOperationsScreen(Screen):
-    def __init__(self, app_instance, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
-
-    def compose(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Label("--- Account Operations ---", classes="title")
-            yield Button("Deposit", id="deposit_button", variant="primary")
-            yield Button("Withdraw", id="withdraw_button", variant="primary")
-            yield Button("View Balance", id="view_balance_button", variant="primary")
-            yield Button("Back", id="back_to_main_menu", variant="default")
-            yield Label("", id="account_ops_message_label", classes="message")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        account = get_user_account(self.app_instance.logged_in_user_id)
+        account = get_user_account(user_id)
         if not account:
-            self.query_one("#account_ops_message_label", Label).update("Error: Could not retrieve bank account.")
+            return False, "Your account not found."
+
+        if account.balance < amount:
+            return False, "Insufficient balance to pay this bill."
+
+        if account.withdraw(amount): # This will also save the balance
+            cur.execute("UPDATE bills SET status = 'paid' WHERE id = %s;", (bill_id,))
+            record_transaction(account.account_id, 'bill_payment', amount, category='Bill Payment')
+            conn.commit()
+            return True, f"Successfully paid bill '{bill_name}' for ${amount:.2f}."
+        else:
+            conn.rollback()
+            return False, "Failed to process payment."
+    except Exception as e:
+        conn.rollback()
+        return False, f"Failed to pay bill: {e}"
+    finally:
+        cur.close()
+        conn.close()
+
+def cli_register_user():
+    print("\n--- Register ---")
+    username = input("Username: ")
+    password = input("Password: ")
+    full_name = input("Full Name: ")
+    email = input("Email: ")
+    phone_number = input("Phone Number: ")
+    address = input("Address: ")
+    date_of_birth_str = input("Date of Birth (YYYY-MM-DD): ")
+
+    try:
+        date_of_birth = datetime.datetime.strptime(date_of_birth_str, "%Y-%m-%d").date()
+        success, message = register_user(username, password, full_name, email, phone_number, address, date_of_birth)
+        print(message)
+    except ValueError:
+        print("Invalid date format. Please use YYYY-MM-DD.")
+    except Exception as e:
+        print(f"Registration failed: {e}")
+
+def cli_login_user():
+    print("\n--- Login ---")
+    username = input("Username: ")
+    password = input("Password: ")
+    
+    user_id, full_name, message = login_user(username, password)
+    print(message)
+    return user_id, username, full_name
+
+def cli_account_operations(user_id):
+    while True:
+        account = get_user_account(user_id)
+        if not account:
+            print("Error: Could not retrieve bank account.")
             return
 
-        if event.button.id == "deposit_button":
-            self.app_instance.push_screen(DepositScreen(self.app_instance, account))
-        elif event.button.id == "withdraw_button":
-            self.app_instance.push_screen(WithdrawScreen(self.app_instance, account))
-        elif event.button.id == "view_balance_button":
-            self.query_one("#account_ops_message_label", Label).update(f"Current Balance: ${account.get_balance():.2f}")
-        elif event.button.id == "back_to_main_menu":
-            self.app_instance.pop_screen()
+        print("\n--- Account Operations ---")
+        print("1. Deposit")
+        print("2. Withdraw")
+        print("3. View Balance")
+        print("4. Back to Main Menu")
+        choice = input("Enter your choice: ")
 
-class DepositScreen(Screen):
-    def __init__(self, app_instance, account, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
-        self.account = account
-
-    def compose(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Label("--- Deposit ---", classes="title")
-            yield Label("Amount:")
-            yield Input(placeholder="Enter amount to deposit", id="deposit_amount", type="number")
-            yield Button("Deposit", id="submit_deposit", variant="primary")
-            yield Button("Back", id="back_to_account_ops", variant="default")
-            yield Label("", id="deposit_message_label", classes="message")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "submit_deposit":
+        if choice == '1':
             try:
-                amount = float(self.query_one("#deposit_amount", Input).value)
-                if self.account.deposit(amount):
-                    record_transaction(get_account_id_by_user_id(self.app_instance.logged_in_user_id), 'deposit', amount)
-                    self.query_one("#deposit_message_label", Label).update(f"Successfully deposited ${amount:.2f}.")
+                amount = float(input("Enter amount to deposit: "))
+                if account.deposit(amount):
+                    record_transaction(get_account_id_by_user_id(user_id), 'deposit', amount)
+                    print(f"Successfully deposited ${amount:.2f}.")
                 else:
-                    self.query_one("#deposit_message_label", Label).update("Deposit amount must be positive.")
+                    print("Deposit amount must be positive.")
             except ValueError:
-                self.query_one("#deposit_message_label", Label).update("Invalid amount. Please enter a number.")
-        elif event.button.id == "back_to_account_ops":
-            self.app_instance.pop_screen()
-
-class WithdrawScreen(Screen):
-    def __init__(self, app_instance, account, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
-        self.account = account
-
-    def compose(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Label("--- Withdraw ---", classes="title")
-            yield Label("Amount:")
-            yield Input(placeholder="Enter amount to withdraw", id="withdraw_amount", type="number")
-            yield Button("Withdraw", id="submit_withdraw", variant="primary")
-            yield Button("Back", id="back_to_account_ops", variant="default")
-            yield Label("", id="withdraw_message_label", classes="message")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "submit_withdraw":
+                print("Invalid amount. Please enter a number.")
+        elif choice == '2':
             try:
-                amount = float(self.query_one("#withdraw_amount", Input).value)
-                if self.account.withdraw(amount):
-                    record_transaction(get_account_id_by_user_id(self.app_instance.logged_in_user_id), 'withdraw', amount)
-                    self.query_one("#withdraw_message_label", Label).update(f"Successfully withdrew ${amount:.2f}.")
+                amount = float(input("Enter amount to withdraw: "))
+                if account.withdraw(amount):
+                    record_transaction(get_account_id_by_user_id(user_id), 'withdraw', amount)
+                    print(f"Successfully withdrew ${amount:.2f}.")
                 else:
-                    self.query_one("#withdraw_message_label", Label).update("Invalid withdrawal amount or insufficient balance.")
+                    print("Invalid withdrawal amount or insufficient balance.")
             except ValueError:
-                self.query_one("#withdraw_message_label", Label).update("Invalid amount. Please enter a number.")
-        elif event.button.id == "back_to_account_ops":
-            self.app_instance.pop_screen()
+                print("Invalid amount. Please enter a number.")
+        elif choice == '3':
+            print(f"Current Balance: ${account.get_balance():.2f}")
+        elif choice == '4':
+            break
+        else:
+            print("Invalid choice. Please try again.")
 
-class CardOperationsScreen(Screen):
-    def __init__(self, app_instance, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
+def cli_public_transaction_feed():
+    print("\n--- Public Transaction Feed ---")
+    transactions = get_public_transactions()
+    if transactions:
+        for t in transactions:
+            print(f"[{t[2].strftime('%Y-%m-%d %H:%M:%S')}] {t[3]} {t[0]} ${t[1]:.2f}")
+    else:
+        print("No public transactions available.")
 
-    def compose(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Label("--- Card Operations ---", classes="title")
-            yield Button("Generate Debit Card", id="gen_debit_card_button", variant="primary")
-            yield Button("Generate Credit Card", id="gen_credit_card_button", variant="primary")
-            yield Button("View My Cards", id="view_cards_button", variant="primary")
-            yield Button("Back", id="back_to_main_menu", variant="default")
-            yield Label("", id="card_ops_message_label", classes="message")
+def cli_card_operations(user_id):
+    while True:
+        print("\n--- Card Operations ---")
+        print("1. Generate Debit Card")
+        print("2. Generate Credit Card")
+        print("3. View My Cards")
+        print("4. Back to Main Menu")
+        choice = input("Enter your choice: ")
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "gen_debit_card_button":
-            success, message = generate_card(self.app_instance.logged_in_user_id, 'debit')
-            self.query_one("#card_ops_message_label", Label).update(message)
-        elif event.button.id == "gen_credit_card_button":
-            success, message = generate_card(self.app_instance.logged_in_user_id, 'credit')
-            self.query_one("#card_ops_message_label", Label).update(message)
-        elif event.button.id == "view_cards_button":
-            cards_text = display_cards(self.app_instance.logged_in_user_id)
-            self.app_instance.push_screen(InfoScreen(self.app_instance, "Your Cards", cards_text))
-        elif event.button.id == "back_to_main_menu":
-            self.app_instance.pop_screen()
+        if choice == '1':
+            success, message = generate_card(user_id, 'debit')
+            print(message)
+        elif choice == '2':
+            success, message = generate_card(user_id, 'credit')
+            print(message)
+        elif choice == '3':
+            cards_text = display_cards(user_id)
+            print(cards_text)
+        elif choice == '4':
+            break
+        else:
+            print("Invalid choice. Please try again.")
 
-class TransferFundsScreen(Screen):
-    def __init__(self, app_instance, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
+def cli_transfer_funds(user_id):
+    print("\n--- Transfer Funds ---")
+    to_account_number = input("Recipient's Account Number: ")
+    try:
+        amount = float(input("Enter amount to transfer: "))
+        success, message = transfer_funds(user_id, to_account_number, amount)
+        print(message)
+    except ValueError:
+        print("Invalid amount. Please enter a number.")
 
-    def compose(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Label("--- Transfer Funds ---", classes="title")
-            yield Label("Recipient's Account Number:")
-            yield Input(placeholder="Enter recipient's account number", id="to_account_number")
-            yield Label("Amount:")
-            yield Input(placeholder="Enter amount to transfer", id="transfer_amount", type="number")
-            yield Button("Transfer", id="submit_transfer", variant="primary")
-            yield Button("Back", id="back_to_main_menu", variant="default")
-            yield Label("", id="transfer_message_label", classes="message")
+def cli_loans(user_id):
+    while True:
+        print("\n--- Loan Operations ---")
+        print("1. Apply for Loan")
+        print("2. View My Loans")
+        print("3. Make Loan Payment")
+        print("4. Back to Main Menu")
+        choice = input("Enter your choice: ")
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "submit_transfer":
-            to_account_number = self.query_one("#to_account_number", Input).value
+        if choice == '1':
+            cli_apply_for_loan(user_id)
+        elif choice == '2':
+            loans_text = view_loans(user_id)
+            print(loans_text)
+        elif choice == '3':
+            cli_make_loan_payment(user_id)
+        elif choice == '4':
+            break
+        else:
+            print("Invalid choice. Please try again.")
+
+def cli_apply_for_loan(user_id):
+    print("\n--- Apply for Loan ---")
+    try:
+        amount = float(input("Loan Amount: "))
+        interest_rate = float(input("Annual Interest Rate (e.g., 0.05 for 5%): "))
+        term_months = int(input("Loan Term in Months: "))
+        success, message = apply_for_loan(user_id, amount, interest_rate, term_months)
+        print(message)
+    except ValueError:
+        print("Invalid input. Please enter numbers for amount, rate, and term.")
+
+def cli_make_loan_payment(user_id):
+    print("\n--- Make Loan Payment ---")
+    try:
+        loan_id = int(input("Loan ID: "))
+        amount = float(input("Payment Amount: "))
+        success, message = make_loan_payment(user_id, loan_id, amount)
+        print(message)
+    except ValueError:
+        print("Invalid input. Please enter numbers for loan ID and amount.")
+
+def cli_search_users():
+    print("\n--- Search Users ---")
+    query = input("Search Query (username or full name): ")
+    results = search_users(query)
+    print(results)
+
+def cli_money_requests(user_id):
+    while True:
+        print("\n--- Money Request Operations ---")
+        print("1. Send Money Request")
+        print("2. View Pending Requests")
+        print("3. Respond to Request")
+        print("4. Back to Main Menu")
+        choice = input("Enter your choice: ")
+
+        if choice == '1':
+            cli_send_money_request(user_id)
+        elif choice == '2':
+            requests_text = view_money_requests(user_id)
+            print(requests_text)
+        elif choice == '3':
+            cli_respond_to_money_request(user_id)
+        elif choice == '4':
+            break
+        else:
+            print("Invalid choice. Please try again.")
+
+def cli_send_money_request(user_id):
+    print("\n--- Send Money Request ---")
+    to_username = input("Recipient Username: ")
+    try:
+        amount = float(input("Enter amount to request: "))
+        success, message = request_money(user_id, to_username, amount)
+        print(message)
+    except ValueError:
+        print("Invalid amount. Please enter a number.")
+
+def cli_respond_to_money_request(user_id):
+    print("\n--- Respond to Money Request ---")
+    try:
+        request_id = int(input("Request ID: "))
+        action = input("Action (accept/decline): ").lower()
+        success, message = respond_to_money_request(request_id, user_id, action)
+        print(message)
+    except ValueError:
+        print("Invalid Request ID. Please enter a number.")
+
+def cli_bill_operations(user_id):
+    while True:
+        print("\n--- Bill Payment Operations ---")
+        print("1. Add New Bill")
+        print("2. View My Bills")
+        print("3. Pay a Bill")
+        print("4. Back to Main Menu")
+        choice = input("Enter your choice: ")
+
+        if choice == '1':
+            print("\n--- Add New Bill ---")
+            bill_name = input("Bill Name: ")
+            due_date_str = input("Due Date (YYYY-MM-DD): ")
             try:
-                amount = float(self.query_one("#transfer_amount", Input).value)
-                success, message = transfer_funds(self.app_instance.logged_in_user_id, to_account_number, amount)
-                self.query_one("#transfer_message_label", Label).update(message)
+                amount = float(input("Amount: "))
+                success, message = add_bill(user_id, bill_name, due_date_str, amount)
+                print(message)
             except ValueError:
-                self.query_one("#transfer_message_label", Label).update("Invalid amount. Please enter a number.")
-        elif event.button.id == "back_to_main_menu":
-            self.app_instance.pop_screen()
-
-class LoansScreen(Screen):
-    def __init__(self, app_instance, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
-
-    def compose(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Label("--- Loan Operations ---", classes="title")
-            yield Button("Apply for Loan", id="apply_loan_button", variant="primary")
-            yield Button("View My Loans", id="view_loans_button", variant="primary")
-            yield Button("Make Loan Payment", id="make_loan_payment_button", variant="primary")
-            yield Button("Back", id="back_to_main_menu", variant="default")
-            yield Label("", id="loans_message_label", classes="message")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "apply_loan_button":
-            self.app_instance.push_screen(ApplyLoanScreen(self.app_instance))
-        elif event.button.id == "view_loans_button":
-            loans_text = view_loans(self.app_instance.logged_in_user_id)
-            self.app_instance.push_screen(InfoScreen(self.app_instance, "Your Loans", loans_text))
-        elif event.button.id == "make_loan_payment_button":
-            self.app_instance.push_screen(MakeLoanPaymentScreen(self.app_instance))
-        elif event.button.id == "back_to_main_menu":
-            self.app_instance.pop_screen()
-
-class ApplyLoanScreen(Screen):
-    def __init__(self, app_instance, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
-
-    def compose(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Label("--- Apply for Loan ---", classes="title")
-            yield Label("Loan Amount:")
-            yield Input(placeholder="Enter loan amount", id="loan_amount", type="number")
-            yield Label("Annual Interest Rate (e.g., 0.05 for 5%):")
-            yield Input(placeholder="Enter interest rate", id="interest_rate", type="number")
-            yield Label("Loan Term in Months:")
-            yield Input(placeholder="Enter loan term", id="term_months", type="number")
-            yield Button("Apply", id="submit_loan_application", variant="primary")
-            yield Button("Back", id="back_to_loans", variant="default")
-            yield Label("", id="apply_loan_message_label", classes="message")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "submit_loan_application":
+                print("Invalid amount. Please enter a number.")
+        elif choice == '2':
+            print("\n--- My Bills ---")
+            bills = get_user_bills(user_id)
+            if bills:
+                for bill in bills:
+                    print(f"ID: {bill[0]}, Name: {bill[1]}, Due: {bill[2]}, Amount: ${bill[3]:.2f}, Status: {bill[4].capitalize()}")
+            else:
+                print("No bills found.")
+        elif choice == '3':
+            print("\n--- Pay a Bill ---")
             try:
-                amount = float(self.query_one("#loan_amount", Input).value)
-                interest_rate = float(self.query_one("#interest_rate", Input).value)
-                term_months = int(self.query_one("#term_months", Input).value)
-                success, message = apply_for_loan(self.app_instance.logged_in_user_id, amount, interest_rate, term_months)
-                self.query_one("#apply_loan_message_label", Label).update(message)
-                if success:
-                    self.app_instance.pop_screen()
+                bill_id = int(input("Enter Bill ID to pay: "))
+                success, message = pay_bill(user_id, bill_id)
+                print(message)
             except ValueError:
-                self.query_one("#apply_loan_message_label", Label).update("Invalid input. Please enter numbers for amount, rate, and term.")
-        elif event.button.id == "back_to_loans":
-            self.app_instance.pop_screen()
+                print("Invalid Bill ID. Please enter a number.")
+        elif choice == '4':
+            break
+        else:
+            print("Invalid choice. Please try again.")
 
-class MakeLoanPaymentScreen(Screen):
-    def __init__(self, app_instance, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
+def main():
+    create_tables()
+    logged_in_user_id = None
+    logged_in_username = None
+    logged_in_full_name = None
 
-    def compose(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Label("--- Make Loan Payment ---", classes="title")
-            yield Label("Loan ID:")
-            yield Input(placeholder="Enter Loan ID", id="loan_id", type="number")
-            yield Label("Payment Amount:")
-            yield Input(placeholder="Enter payment amount", id="payment_amount", type="number")
-            yield Button("Make Payment", id="submit_loan_payment", variant="primary")
-            yield Button("Back", id="back_to_loans", variant="default")
-            yield Label("", id="make_payment_message_label", classes="message")
+    while True:
+        if logged_in_user_id is None:
+            print("\n--- Welcome to Internet Banking ---")
+            print("1. Register")
+            print("2. Login")
+            print("3. Exit")
+            choice = input("Enter your choice: ")
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "submit_loan_payment":
-            try:
-                loan_id = int(self.query_one("#loan_id", Input).value)
-                amount = float(self.query_one("#payment_amount", Input).value)
-                success, message = make_loan_payment(self.app_instance.logged_in_user_id, loan_id, amount)
-                self.query_one("#make_payment_message_label", Label).update(message)
-                if success:
-                    self.app_instance.pop_screen()
-            except ValueError:
-                self.query_one("#make_payment_message_label", Label).update("Invalid input. Please enter numbers for loan ID and amount.")
-        elif event.button.id == "back_to_loans":
-            self.app_instance.pop_screen()
+            if choice == '1':
+                cli_register_user()
+            elif choice == '2':
+                user_id, username, full_name = cli_login_user()
+                if user_id:
+                    logged_in_user_id = user_id
+                    logged_in_username = username
+                    logged_in_full_name = full_name
+            elif choice == '3':
+                print("Exiting. Goodbye!")
+                break
+            else:
+                print("Invalid choice. Please try again.")
+        else:
+            print(f"\n--- Welcome, {logged_in_username}! ---")
+            print("1. Account Operations")
+            print("2. Card Operations")
+            print("3. View Transaction History")
+            print("4. Transfer Funds")
+            print("5. Loans")
+            print("6. Search Users")
+            print("7. Money Requests")
+            print("8. Public Transaction Feed") # New Feature 1
+            print("9. Bill Payments") # New Feature 2
+            print("10. Logout")
+            choice = input("Enter your choice: ")
 
-class SearchUsersScreen(Screen):
-    def __init__(self, app_instance, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
-
-    def compose(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Label("--- Search Users ---", classes="title")
-            yield Label("Search Query (username or full name):")
-            yield Input(placeholder="Enter search query", id="search_query")
-            yield Button("Search", id="submit_search_users", variant="primary")
-            yield Button("Back", id="back_to_main_menu", variant="default")
-            yield Label("", id="search_users_message_label", classes="message")
-            yield Static("", id="search_results_display", classes="results")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "submit_search_users":
-            query = self.query_one("#search_query", Input).value
-            results = search_users(query)
-            self.query_one("#search_results_display", Static).update(results)
-        elif event.button.id == "back_to_main_menu":
-            self.app_instance.pop_screen()
-
-class MoneyRequestsScreen(Screen):
-    def __init__(self, app_instance, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
-
-    def compose(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Label("--- Money Request Operations ---", classes="title")
-            yield Button("Send Money Request", id="send_money_request_button", variant="primary")
-            yield Button("View Pending Requests", id="view_pending_requests_button", variant="primary")
-            yield Button("Respond to Request", id="respond_to_request_button", variant="primary")
-            yield Button("Back", id="back_to_main_menu", variant="default")
-            yield Label("", id="money_requests_message_label", classes="message")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "send_money_request_button":
-            self.app_instance.push_screen(SendMoneyRequestScreen(self.app_instance))
-        elif event.button.id == "view_pending_requests_button":
-            requests_text = view_money_requests(self.app_instance.logged_in_user_id)
-            self.app_instance.push_screen(InfoScreen(self.app_instance, "Pending Money Requests", requests_text))
-        elif event.button.id == "respond_to_request_button":
-            self.app_instance.push_screen(RespondToMoneyRequestScreen(self.app_instance))
-        elif event.button.id == "back_to_main_menu":
-            self.app_instance.pop_screen()
-
-class SendMoneyRequestScreen(Screen):
-    def __init__(self, app_instance, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
-
-    def compose(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Label("--- Send Money Request ---", classes="title")
-            yield Label("Recipient Username:")
-            yield Input(placeholder="Enter recipient's username", id="to_username")
-            yield Label("Amount:")
-            yield Input(placeholder="Enter amount to request", id="request_amount", type="number")
-            yield Button("Send Request", id="submit_money_request", variant="primary")
-            yield Button("Back", id="back_to_money_requests", variant="default")
-            yield Label("", id="send_request_message_label", classes="message")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "submit_money_request":
-            to_username = self.query_one("#to_username", Input).value
-            try:
-                amount = float(self.query_one("#request_amount", Input).value)
-                success, message = request_money(self.app_instance.logged_in_user_id, to_username, amount)
-                self.query_one("#send_request_message_label", Label).update(message)
-                if success:
-                    self.app_instance.pop_screen()
-            except ValueError:
-                self.query_one("#send_request_message_label", Label).update("Invalid amount. Please enter a number.")
-        elif event.button.id == "back_to_money_requests":
-            self.app_instance.pop_screen()
-
-class RespondToMoneyRequestScreen(Screen):
-    def __init__(self, app_instance, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
-
-    def compose(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Label("--- Respond to Money Request ---", classes="title")
-            yield Label("Request ID:")
-            yield Input(placeholder="Enter Request ID", id="request_id", type="number")
-            yield Label("Action (accept/decline):")
-            yield Input(placeholder="Type 'accept' or 'decline'", id="request_action")
-            yield Button("Submit Response", id="submit_request_response", variant="primary")
-            yield Button("Back", id="back_to_money_requests", variant="default")
-            yield Label("", id="respond_request_message_label", classes="message")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "submit_request_response":
-            try:
-                request_id = int(self.query_one("#request_id", Input).value)
-                action = self.query_one("#request_action", Input).value.lower()
-                success, message = respond_to_money_request(request_id, self.app_instance.logged_in_user_id, action)
-                self.query_one("#respond_request_message_label", Label).update(message)
-                if success:
-                    self.app_instance.pop_screen()
-            except ValueError:
-                self.query_one("#respond_request_message_label", Label).update("Invalid Request ID. Please enter a number.")
-        elif event.button.id == "back_to_money_requests":
-            self.app_instance.pop_screen()
-
-class InfoScreen(Screen):
-    def __init__(self, app_instance, title, content, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.app_instance = app_instance
-        self.title = title
-        self.content = content
-
-    def compose(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Label(f"--- {self.title} ---", classes="title")
-            yield Static(self.content, classes="info_content")
-            yield Button("Back", id="back_from_info", variant="default")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back_from_info":
-            self.app_instance.pop_screen()
-
-class ZeldaBank(App):
-    CSS_PATH = "styles.css"
-    BINDINGS = [
-        ("d", "toggle_dark", "Toggle dark mode"),
-        ("q", "quit", "Quit"),
-    ]
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.logged_in_user_id = None
-        self.logged_in_username = None
-        self.logged_in_full_name = None
-
-    def compose(self) -> ComposeResult:
-        yield MainScreen(self)
-
-    def on_mount(self) -> None:
-        create_tables() 
-
-    def action_toggle_dark(self) -> None:
-        self.dark = not self.dark
-
-    def action_quit(self) -> None:
-        self.exit("Exiting. Goodbye!")
+            if choice == '1':
+                cli_account_operations(logged_in_user_id)
+            elif choice == '2':
+                cli_card_operations(logged_in_user_id)
+            elif choice == '3':
+                transactions_text = view_transaction_history(logged_in_user_id)
+                print(transactions_text)
+            elif choice == '4':
+                cli_transfer_funds(logged_in_user_id)
+            elif choice == '5':
+                cli_loans(logged_in_user_id)
+            elif choice == '6':
+                cli_search_users()
+            elif choice == '7':
+                cli_money_requests(logged_in_user_id)
+            elif choice == '8': # New Feature 1
+                cli_public_transaction_feed()
+            elif choice == '9': # New Feature 2
+                cli_bill_operations(logged_in_user_id)
+            elif choice == '10':
+                logged_in_user_id = None
+                logged_in_username = None
+                logged_in_full_name = None
+                print("Logged out successfully.")
+            else:
+                print("Invalid choice. Please try again.")
 
 if __name__ == "__main__":
-    app = ZeldaBank()
-    app.run()
+    main()
