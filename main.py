@@ -6,7 +6,7 @@ import random
 import datetime
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Button, Input, Label, Static
-from textual.containers import VerticalScroll
+from textual.containers import VerticalScroll, Vertical
 from textual.screen import Screen
 
 load_dotenv()
@@ -515,7 +515,7 @@ class MainScreen(Screen):
         self.app_instance = app_instance
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll(classes="main-screen-content"):
+        with Vertical():
             yield Label("--- Welcome to Internet Banking ---", classes="title")
             yield Button("Register", id="register_button", variant="primary")
             yield Button("Login", id="login_button", variant="primary")
@@ -1005,7 +1005,7 @@ class InfoScreen(Screen):
         if event.button.id == "back_from_info":
             self.app_instance.pop_screen()
 
-class ZeldaBankApp(App):
+class ZeldaBank(App):
     CSS_PATH = "styles.css"
     BINDINGS = [
         ("d", "toggle_dark", "Toggle dark mode"),
@@ -1019,12 +1019,10 @@ class ZeldaBankApp(App):
         self.logged_in_full_name = None
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        yield Footer()
         yield MainScreen(self)
 
     def on_mount(self) -> None:
-        create_tables() # Ensure tables are created on app start
+        create_tables() 
 
     def action_toggle_dark(self) -> None:
         self.dark = not self.dark
@@ -1033,5 +1031,5 @@ class ZeldaBankApp(App):
         self.exit("Exiting. Goodbye!")
 
 if __name__ == "__main__":
-    app = ZeldaBankApp()
+    app = ZeldaBank()
     app.run()
